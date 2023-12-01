@@ -33,7 +33,12 @@ internal class ProcessOneConnectionWorker
 		cancellationToken.ThrowIfCancellationRequested();
 
 		using StreamReader reader = new(stream);
+		await ProcessAsync(reader);
+		await stream.FlushAsync(cancellationToken);
+	}
 
+	private async Task ProcessAsync(StreamReader reader)
+	{
 		string method;
 		string rawPath;
 		string httpVersion;
