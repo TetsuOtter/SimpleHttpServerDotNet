@@ -86,9 +86,20 @@ internal class ProcessOneConnectionWorker
 			headers.Add(headerParts[0], headerParts[1].Trim());
 		}
 
-		if (!reader.EndOfStream)
+		if (headers.GetValues("Content-Length") is string[] contentLengthValues)
 		{
-			long contentLength = reader.BaseStream.Length - reader.BaseStream.Position;
+			if (contentLengthValues.Length != 1)
+			{
+				await WriteResponseAsync("400 Bad Request", "text/plain", "Bad Request (invalid Content-Length header)");
+				return;
+			}
+
+			if (!long.TryParse(contentLengthValues[0], out long contentLength))
+			{
+				await WriteResponseAsync("400 Bad Request", "text/plain", "Bad Request (invalid Content-Length header)");
+				return;
+			}
+
 			if (0 < contentLength)
 			{
 				body = new byte[contentLength];
