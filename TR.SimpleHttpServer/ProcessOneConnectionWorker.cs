@@ -136,13 +136,14 @@ internal class ProcessOneConnectionWorker
 
 	private Task WriteResponseAsync(string status, string contentType, byte[] content, bool hasBody = false)
 	{
-		string headerStr = string.Join("\r\n", [
+		string headerStr = string.Join(crlfStr, [
 			$"HTTP/1.0 {status}",
 			$"Server: {typeof(HttpServer).FullName}",
 			$"Content-Type: {contentType}; charset=UTF-8",
 			$"Content-Length: {content.Length}",
 			$"Date: {DateTime.UtcNow:R}",
-			$"Connection: close"
+			$"Connection: close",
+			""
 		]);
 
 		return WriteResponseAsync(Encoding.UTF8.GetBytes(headerStr), content, hasBody);
@@ -174,6 +175,7 @@ internal class ProcessOneConnectionWorker
 			commonHeaders
 				.Concat(response.AdditionalHeaders.AllKeys
 				.Select(key => $"{key}: {response.AdditionalHeaders[key]}"))
+				.Concat([""])
 		);
 
 		return WriteResponseAsync(Encoding.UTF8.GetBytes(headerStr), response.Body, hasBody);
