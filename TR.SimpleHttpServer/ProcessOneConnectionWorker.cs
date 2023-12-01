@@ -39,6 +39,7 @@ internal class ProcessOneConnectionWorker
 
 	private async Task ProcessAsync(StreamReader reader)
 	{
+		bool isHeadMethod;
 		string method;
 		string rawPath;
 		string httpVersion;
@@ -59,9 +60,10 @@ internal class ProcessOneConnectionWorker
 				return;
 			}
 
-			method = requestLineParts[0];
+			method = requestLineParts[0].ToUpper();
 			rawPath = requestLineParts[1];
 			httpVersion = requestLineParts[2];
+			isHeadMethod = method == "HEAD";
 		}
 
 		while (true)
@@ -122,7 +124,7 @@ internal class ProcessOneConnectionWorker
 		try
 		{
 			HttpResponse response = await handler(request);
-			await WriteResponseAsync(response, true);
+			await WriteResponseAsync(response, hasBody: !isHeadMethod);
 		}
 		catch (Exception ex)
 		{
