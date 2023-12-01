@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Specialized;
-using System.IO;
 using System.Linq;
 using System.Net.Sockets;
 using System.Text;
@@ -34,12 +33,12 @@ internal class ProcessOneConnectionWorker
 
 		stream.ReadTimeout = 2000;
 		stream.WriteTimeout = 2000;
-		using StreamReader reader = new(stream);
+		MyStreamReader reader = new(stream, cancellationToken, Encoding.UTF8);
 		await ProcessAsync(reader);
 		await stream.FlushAsync(cancellationToken);
 	}
 
-	private async Task ProcessAsync(StreamReader reader)
+	private async Task ProcessAsync(MyStreamReader reader)
 	{
 		bool isHeadMethod;
 		string method;
@@ -106,8 +105,7 @@ internal class ProcessOneConnectionWorker
 
 			if (0 < contentLength)
 			{
-				body = new byte[contentLength];
-				await reader.BaseStream.ReadAsync(body, 0, body.Length);
+				body = await reader.ReadRemainingBytesAsync();
 			}
 		}
 
