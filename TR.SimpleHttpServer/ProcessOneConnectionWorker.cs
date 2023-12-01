@@ -126,7 +126,7 @@ internal class ProcessOneConnectionWorker
 		try
 		{
 			HttpResponse response = await handler(request);
-			await WriteResponseAsync(response, hasBody: !isHeadMethod);
+			await WriteResponseAsync(response, isHead: isHeadMethod);
 		}
 		catch (Exception ex)
 		{
@@ -138,7 +138,7 @@ internal class ProcessOneConnectionWorker
 	private Task WriteResponseAsync(string status, string contentType, string content, bool isHead = false)
 		=> WriteResponseAsync(status, contentType, Encoding.UTF8.GetBytes(content), isHead);
 
-	private Task WriteResponseAsync(string status, string contentType, byte[] content, bool hasBody = false)
+	private Task WriteResponseAsync(string status, string contentType, byte[] content, bool isHead = false)
 	{
 		string headerStr = string.Join(crlfStr, [
 			$"HTTP/1.0 {status}",
@@ -150,20 +150,20 @@ internal class ProcessOneConnectionWorker
 			""
 		]);
 
-		return WriteResponseAsync(Encoding.UTF8.GetBytes(headerStr), content, hasBody);
+		return WriteResponseAsync(Encoding.UTF8.GetBytes(headerStr), content, isHead);
 	}
 
 	private static readonly string crlfStr = "\r\n";
 	private static readonly byte[] crlf = [(byte)'\r', (byte)'\n'];
-	private async Task WriteResponseAsync(byte[] header, byte[] content, bool hasBody = false)
+	private async Task WriteResponseAsync(byte[] header, byte[] content, bool isHead = false)
 	{
 		await stream.WriteAsync(header, 0, header.Length, cancellationToken);
 		await stream.WriteAsync(crlf, 0, crlf.Length, cancellationToken);
-		if (hasBody && 0 < content.Length)
+		if (!isHead && 0 < content.Length)
 			await stream.WriteAsync(content, 0, content.Length, cancellationToken);
 	}
 
-	private Task WriteResponseAsync(HttpResponse response, bool hasBody = false)
+	private Task WriteResponseAsync(HttpResponse response, bool isHead = false)
 	{
 		string[] commonHeaders = [
 			$"HTTP/1.0 {response.Status}",
@@ -182,7 +182,7 @@ internal class ProcessOneConnectionWorker
 				.Concat([""])
 		);
 
-		return WriteResponseAsync(Encoding.UTF8.GetBytes(headerStr), response.Body, hasBody);
+		return WriteResponseAsync(Encoding.UTF8.GetBytes(headerStr), response.Body, isHead);
 	}
 
 	#region IDisposable Support
