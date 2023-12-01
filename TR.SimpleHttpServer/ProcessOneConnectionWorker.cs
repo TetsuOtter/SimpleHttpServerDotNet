@@ -117,8 +117,8 @@ internal class ProcessOneConnectionWorker
 		int questionMarkIndex = path.IndexOf('?');
 		if (questionMarkIndex != -1)
 		{
-			path = path.Substring(0, questionMarkIndex);
 			query = path.Substring(questionMarkIndex + 1);
+			path = path.Substring(0, questionMarkIndex);
 		}
 
 		NameValueCollection queryString = HttpUtility.ParseQueryString(query);
