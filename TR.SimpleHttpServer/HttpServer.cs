@@ -65,7 +65,7 @@ public class HttpServer(IPAddress localAddress, ushort port, HttpConnectionHandl
 			TcpClient client;
 			try
 			{
-				client = await Listener.AcceptTcpClientAsync();
+				client = await Listener.AcceptTcpClientAsync().ConfigureAwait(false);
 			}
 			catch (InvalidOperationException)
 			{
@@ -84,7 +84,7 @@ public class HttpServer(IPAddress localAddress, ushort port, HttpConnectionHandl
 			_ = Task
 				.Run(async () => {
 					using ProcessOneConnectionWorker worker = new(client, cancellationToken, Handler);
-					await worker.ProcessAsync();
+					await worker.ProcessAsync().ConfigureAwait(false);
 				}, cancellationToken)
 				.ContinueWith((task) => {
 					if (task.IsFaulted)
