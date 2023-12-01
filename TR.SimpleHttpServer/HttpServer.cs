@@ -28,6 +28,12 @@ public class HttpServer(IPAddress localAddress, ushort port, HttpConnectionHandl
 
 		CancellationTokenSource = new();
 		Listener.Start();
+		Task.Run(ListenTaskAsync).ContinueWith((task) => {
+			if (task.IsFaulted)
+			{
+				Console.Error.WriteLine(task.Exception);
+			}
+		});
 	}
 
 	public void Stop()
