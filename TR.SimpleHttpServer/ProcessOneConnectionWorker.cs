@@ -32,7 +32,6 @@ internal class ProcessOneConnectionWorker
 
 		cancellationToken.ThrowIfCancellationRequested();
 
-		using NetworkStream stream = client.GetStream();
 		using StreamReader reader = new(stream);
 
 		string method;
