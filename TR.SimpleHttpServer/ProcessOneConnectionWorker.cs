@@ -32,6 +32,8 @@ internal class ProcessOneConnectionWorker
 
 		cancellationToken.ThrowIfCancellationRequested();
 
+		stream.ReadTimeout = 2000;
+		stream.WriteTimeout = 2000;
 		using StreamReader reader = new(stream);
 		await ProcessAsync(reader);
 		await stream.FlushAsync(cancellationToken);
@@ -176,7 +178,7 @@ internal class ProcessOneConnectionWorker
 			crlfStr,
 			commonHeaders
 				.Concat(response.AdditionalHeaders.AllKeys
-				.Select(key => $"{key}: {response.AdditionalHeaders[key]}"))
+					.Select(key => $"{key}: {response.AdditionalHeaders[key]}"))
 				.Concat([""])
 		);
 
