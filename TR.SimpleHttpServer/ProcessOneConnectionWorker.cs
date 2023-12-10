@@ -109,8 +109,8 @@ internal class ProcessOneConnectionWorker
 			}
 		}
 
-		Uri uri = new(rawPath);
-		string path = uri.LocalPath;
+		string path = HttpUtility.UrlDecode(rawPath);
+		string decodedPath = path;
 		string query = "";
 		int questionMarkIndex = path.IndexOf('?');
 		if (questionMarkIndex != -1)
@@ -120,7 +120,7 @@ internal class ProcessOneConnectionWorker
 		}
 
 		NameValueCollection queryString = HttpUtility.ParseQueryString(query);
-		HttpRequest request = new(method, uri.LocalPath, headers, queryString, body);
+		HttpRequest request = new(method, path, headers, queryString, body);
 		try
 		{
 			HttpResponse response = await handler(request);
