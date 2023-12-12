@@ -5,6 +5,19 @@
 		<LangVersion>12</LangVersion>
 		<Nullable>enable</Nullable>
 		<Version>1.0.0</Version>
+		<Authors>Tetsu Otter</Authors>
+		<Company>Tech Otter</Company>
+		<Description>Simple Http Server</Description>
+		<Copyright>Copyright 2023 Tetsu Otter</Copyright>
+		<PackageLicenseExpression>MIT</PackageLicenseExpression>
+		<PackageProjectUrl>https://github.com/TetsuOtter/SimpleHttpServerDotNet</PackageProjectUrl>
+		<PackageReadmeFile>README.md</PackageReadmeFile>
+		<RepositoryUrl>https://github.com/TetsuOtter/SimpleHttpServerDotNet.git</RepositoryUrl>
+		<RepositoryType>git</RepositoryType>
 	</PropertyGroup>
+
+	<ItemGroup>
+		<None Include="README.md" Pack="true" PackagePath="/"/>
+	</ItemGroup>
 
 </Project>
