@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Specialized;
 using System.Linq;
+using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
@@ -49,7 +50,7 @@ internal class ProcessOneConnectionWorker
 		string requestLine = await reader.ReadLineAsync();
 		if (requestLine is null)
 		{
-			await WriteResponseAsync("400 Bad Request", "text/plain", "Bad Request (empty request)");
+			await WriteResponseAsync(HttpStatusCode.BadRequest, "text/plain", "Bad Request (empty request)");
 			return;
 		}
 
@@ -58,13 +59,13 @@ internal class ProcessOneConnectionWorker
 			int firstSpaceIndex = requestLine.IndexOf(' ');
 			if (firstSpaceIndex == -1)
 			{
-				await WriteResponseAsync("400 Bad Request", "text/plain", "Bad Request (invalid request line - no space character)");
+				await WriteResponseAsync(HttpStatusCode.BadRequest, "text/plain", "Bad Request (invalid request line - no space character)");
 				return;
 			}
 			int lastSpaceIndex = requestLine.LastIndexOf(' ');
 			if (firstSpaceIndex == lastSpaceIndex)
 			{
-				await WriteResponseAsync("400 Bad Request", "text/plain", "Bad Request (invalid request line - only one space character)");
+				await WriteResponseAsync(HttpStatusCode.BadRequest, "text/plain", "Bad Request (invalid request line - only one space character)");
 				return;
 			}
 
@@ -79,7 +80,7 @@ internal class ProcessOneConnectionWorker
 			string? headerLine = await reader.ReadLineAsync();
 			if (headerLine is null)
 			{
-				await WriteResponseAsync("400 Bad Request", "text/plain", "Bad Request (empty header)");
+				await WriteResponseAsync(HttpStatusCode.BadRequest, "text/plain", "Bad Request (empty header)");
 				return;
 			}
 
@@ -89,7 +90,7 @@ internal class ProcessOneConnectionWorker
 			string[] headerParts = headerLine.Split([':'], 2);
 			if (headerParts.Length != 2)
 			{
-				await WriteResponseAsync("400 Bad Request", "text/plain", "Bad Request (invalid header)");
+				await WriteResponseAsync(HttpStatusCode.BadRequest, "text/plain", "Bad Request (invalid header)");
 				return;
 			}
 
@@ -100,13 +101,13 @@ internal class ProcessOneConnectionWorker
 		{
 			if (contentLengthValues.Length != 1)
 			{
-				await WriteResponseAsync("400 Bad Request", "text/plain", "Bad Request (invalid Content-Length header)");
+				await WriteResponseAsync(HttpStatusCode.BadRequest, "text/plain", "Bad Request (invalid Content-Length header)");
 				return;
 			}
 
 			if (!long.TryParse(contentLengthValues[0], out long contentLength))
 			{
-				await WriteResponseAsync("400 Bad Request", "text/plain", "Bad Request (invalid Content-Length header)");
+				await WriteResponseAsync(HttpStatusCode.BadRequest, "text/plain", "Bad Request (invalid Content-Length header)");
 				return;
 			}
 
@@ -135,10 +136,13 @@ internal class ProcessOneConnectionWorker
 		}
 		catch (Exception ex)
 		{
-			await WriteResponseAsync("500 Internal Server Error", "text/plain", ex.ToString());
+			await WriteResponseAsync(HttpStatusCode.InternalServerError, "text/plain", ex.ToString());
 			return;
 		}
 	}
+
+	private Task WriteResponseAsync(HttpStatusCode statusCode, string contentType, string content, bool isHead = false)
+		=> WriteResponseAsync($"{(int)statusCode} {HttpResponse.GetHttpStatusCodeDescription(statusCode)}", contentType, Encoding.UTF8.GetBytes(content), isHead);
 
 	private Task WriteResponseAsync(string status, string contentType, string content, bool isHead = false)
 		=> WriteResponseAsync(status, contentType, Encoding.UTF8.GetBytes(content), isHead);
