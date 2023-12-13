@@ -54,16 +54,23 @@ internal class ProcessOneConnectionWorker
 		}
 
 		{
-			string[] requestLineParts = requestLine.Split([' '], 3);
-			if (requestLineParts.Length != 3)
+			requestLine = requestLine.Trim();
+			int firstSpaceIndex = requestLine.IndexOf(' ');
+			if (firstSpaceIndex == -1)
 			{
-				await WriteResponseAsync("400 Bad Request", "text/plain", "Bad Request (invalid request line)");
+				await WriteResponseAsync("400 Bad Request", "text/plain", "Bad Request (invalid request line - no space character)");
+				return;
+			}
+			int lastSpaceIndex = requestLine.LastIndexOf(' ');
+			if (firstSpaceIndex == lastSpaceIndex)
+			{
+				await WriteResponseAsync("400 Bad Request", "text/plain", "Bad Request (invalid request line - only one space character)");
 				return;
 			}
 
-			method = requestLineParts[0].ToUpper();
-			rawPath = requestLineParts[1];
-			httpVersion = requestLineParts[2];
+			method = requestLine.Substring(0, firstSpaceIndex).ToUpper();
+			rawPath = requestLine.Substring(firstSpaceIndex + 1, lastSpaceIndex - firstSpaceIndex - 1).Trim();
+			httpVersion = requestLine.Substring(lastSpaceIndex + 1);
 			isHeadMethod = method == "HEAD";
 		}
 
