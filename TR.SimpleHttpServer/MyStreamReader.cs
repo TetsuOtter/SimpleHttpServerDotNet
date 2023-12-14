@@ -23,10 +23,10 @@ internal class MyStreamReader(
 	const char CR = '\r';
 	const char LF = '\n';
 
-	private Task<int> ReadIfAvailableAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
-	 => stream.DataAvailable ? stream.ReadAsync(buffer, offset, count, cancellationToken) : Task.FromResult(0);
+	private Task<int> ReadIfAvailableAsync(byte[] buffer, int offset, int count, bool forceRead, CancellationToken cancellationToken)
+	 => forceRead || stream.DataAvailable ? stream.ReadAsync(buffer, offset, count, cancellationToken) : Task.FromResult(0);
 
-  public async Task<string> ReadLineAsync()
+  public async Task<string> ReadLineAsync(bool forceRead = false)
 	{
 		if (!stream.CanRead)
 			throw new InvalidOperationException("Stream is not readable.");
@@ -114,7 +114,7 @@ internal class MyStreamReader(
 		while (true)
 		{
 			byte[] tmp = new byte[DefaultBufferSize];
-			int bytesRead = await ReadIfAvailableAsync(tmp, 0, tmp.Length, cancellationToken);
+			int bytesRead = await ReadIfAvailableAsync(tmp, 0, tmp.Length, false, cancellationToken);
 			if (bytesRead <= 0)
 				return byteArrayToReturn;
 

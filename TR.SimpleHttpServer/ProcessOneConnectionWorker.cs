@@ -47,7 +47,7 @@ internal class ProcessOneConnectionWorker
 		string httpVersion;
 		byte[] body = [];
 		NameValueCollection headers = [];
-		string requestLine = await reader.ReadLineAsync();
+		string requestLine = await reader.ReadLineAsync(forceRead: true);
 		if (requestLine is null)
 		{
 			await WriteResponseAsync(HttpStatusCode.BadRequest, "text/plain", "Bad Request (empty request)");
