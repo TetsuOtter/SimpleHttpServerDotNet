@@ -62,7 +62,7 @@ internal class MyStreamReader(
 		while (true)
 		{
 			byte[] bufTmp = new byte[DefaultBufferSize];
-			int bytesRead = await ReadIfAvailableAsync(bufTmp, 0, bufTmp.Length, cancellationToken);
+			int bytesRead = await ReadIfAvailableAsync(bufTmp, 0, bufTmp.Length, forceRead, cancellationToken);
 			if (bytesRead <= 0)
 			{
 				if (lineBuffer.Length == 0)
