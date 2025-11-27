@@ -26,10 +26,15 @@ internal class ProcessOneConnectionWorker
 	private readonly HttpConnectionHandler handler = handler;
 	private readonly WebSocketHandler? webSocketHandler = webSocketHandler;
 
+	/// <summary>
+	/// Socket linger timeout in seconds for graceful connection closure
+	/// </summary>
+	private const int SocketLingerTimeoutSeconds = 5;
+
 	public async Task ProcessAsync()
 	{
 		// Enable lingering to ensure data is transmitted before socket closes
-		client.LingerState = new System.Net.Sockets.LingerOption(true, 5);
+		client.LingerState = new System.Net.Sockets.LingerOption(true, SocketLingerTimeoutSeconds);
 		if (disposedValue)
 			throw new ObjectDisposedException(nameof(ProcessOneConnectionWorker));
 
