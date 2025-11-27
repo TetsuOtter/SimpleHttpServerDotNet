@@ -2,6 +2,8 @@
 using System.Threading;
 using System.Threading.Tasks;
 
+using TR.SimpleHttpServer.WebSocket;
+
 namespace TR.SimpleHttpServer.Host;
 
 class Program : IDisposable
@@ -14,6 +16,7 @@ class Program : IDisposable
 
 			program.Start();
 			Console.WriteLine($"Server is running on port {program.server.Port}.");
+			Console.WriteLine("WebSocket endpoint: ws://127.0.0.1:{0}/ws", program.server.Port);
 
 			if (Console.IsInputRedirected)
 			{
@@ -35,7 +38,7 @@ class Program : IDisposable
 
 	public Program()
 	{
-		server = new HttpServer(8080, HandleRequest);
+		server = new HttpServer(8080, HandleRequest, HandleWebSocket);
 	}
 
 	public void Start() => server.Start();
@@ -46,5 +49,44 @@ class Program : IDisposable
 		return Task.FromResult(response);
 	}
 
-  public void Dispose() => ((IDisposable)server).Dispose();
+	static async Task HandleWebSocket(HttpRequest request, WebSocketConnection connection)
+	{
+		Console.WriteLine($"WebSocket connection opened for {request.Path}");
+
+		while (connection.IsOpen)
+		{
+			try
+			{
+				var message = await connection.ReceiveMessageAsync(CancellationToken.None);
+
+				if (message.Type == WebSocketMessageType.Close)
+				{
+					Console.WriteLine("WebSocket close received");
+					await connection.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None);
+					break;
+				}
+
+				if (message.Type == WebSocketMessageType.Text)
+				{
+					string text = message.GetText();
+					Console.WriteLine($"WebSocket text received: {text}");
+					await connection.SendTextAsync($"Echo: {text}", CancellationToken.None);
+				}
+				else if (message.Type == WebSocketMessageType.Binary)
+				{
+					Console.WriteLine($"WebSocket binary received: {message.Data.Length} bytes");
+					await connection.SendBinaryAsync(message.Data, CancellationToken.None);
+				}
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"WebSocket error: {ex.Message}");
+				break;
+			}
+		}
+
+		Console.WriteLine("WebSocket connection closed");
+	}
+
+	public void Dispose() => ((IDisposable)server).Dispose();
 }
