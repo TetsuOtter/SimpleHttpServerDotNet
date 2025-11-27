@@ -8,22 +8,28 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
 
+using TR.SimpleHttpServer.WebSocket;
+
 namespace TR.SimpleHttpServer;
 
 internal class ProcessOneConnectionWorker
 (
 	TcpClient client,
 	CancellationToken cancellationToken,
-	HttpConnectionHandler handler
+	HttpConnectionHandler handler,
+	WebSocketHandler? webSocketHandler
 ) : IDisposable
 {
 	private readonly TcpClient client = client;
 	private readonly NetworkStream stream = client.GetStream();
 	private readonly CancellationToken cancellationToken = cancellationToken;
 	private readonly HttpConnectionHandler handler = handler;
+	private readonly WebSocketHandler? webSocketHandler = webSocketHandler;
 
 	public async Task ProcessAsync()
 	{
+		// Enable lingering to ensure data is transmitted before socket closes
+		client.LingerState = new System.Net.Sockets.LingerOption(true, 5);
 		if (disposedValue)
 			throw new ObjectDisposedException(nameof(ProcessOneConnectionWorker));
 
@@ -129,6 +135,21 @@ internal class ProcessOneConnectionWorker
 
 		NameValueCollection queryString = HttpUtility.ParseQueryString(query);
 		HttpRequest request = new(method, path, headers, queryString, body);
+
+		// Check for WebSocket upgrade request
+		if (webSocketHandler != null && WebSocketHandshake.IsWebSocketUpgradeRequest(request))
+		{
+			try
+			{
+				await HandleWebSocketUpgradeAsync(request);
+			}
+			catch (Exception ex)
+			{
+				await WriteResponseAsync(HttpStatusCode.InternalServerError, "text/plain", ex.ToString());
+			}
+			return;
+		}
+
 		try
 		{
 			HttpResponse response = await handler(request);
@@ -139,6 +160,70 @@ internal class ProcessOneConnectionWorker
 			await WriteResponseAsync(HttpStatusCode.InternalServerError, "text/plain", ex.ToString());
 			return;
 		}
+	}
+
+	private async Task HandleWebSocketUpgradeAsync(HttpRequest request)
+	{
+		// Get the WebSocket key
+		string secWebSocketKey = WebSocketHandshake.GetSecWebSocketKey(request);
+		if (string.IsNullOrEmpty(secWebSocketKey))
+		{
+			await WriteResponseAsync(HttpStatusCode.BadRequest, "text/plain", "Missing Sec-WebSocket-Key header");
+			return;
+		}
+
+		// Send the upgrade response
+		await WriteWebSocketUpgradeResponseAsync(secWebSocketKey);
+
+		// Remove timeouts for WebSocket connections (they can be long-lived)
+		stream.ReadTimeout = System.Threading.Timeout.Infinite;
+		stream.WriteTimeout = System.Threading.Timeout.Infinite;
+
+		// Create WebSocket connection and invoke handler
+		using (WebSocketConnection connection = new WebSocketConnection(stream))
+		{
+			try
+			{
+				await webSocketHandler!(request, connection);
+			}
+			catch (System.IO.EndOfStreamException)
+			{
+				// Client disconnected, this is expected
+			}
+		}
+
+		// Ensure any buffered data is transmitted before closing
+		try
+		{
+			await stream.FlushAsync(cancellationToken);
+			// Gracefully shutdown the socket - this signals to the client that we're done sending
+			// but allows remaining data to be transmitted
+			client.Client.Shutdown(System.Net.Sockets.SocketShutdown.Send);
+		}
+		catch
+		{
+			// Ignore shutdown errors on close
+		}
+	}
+
+	private async Task WriteWebSocketUpgradeResponseAsync(string secWebSocketKey)
+	{
+		NameValueCollection headers = WebSocketHandshake.CreateUpgradeResponseHeaders(secWebSocketKey);
+
+		string headerStr = string.Join(crlfStr, new[] {
+			"HTTP/1.1 101 Switching Protocols",
+			$"Server: {typeof(HttpServer).FullName}",
+			$"Date: {DateTime.UtcNow:R}",
+			$"Upgrade: {headers["Upgrade"]}",
+			$"Connection: {headers["Connection"]}",
+			$"Sec-WebSocket-Accept: {headers["Sec-WebSocket-Accept"]}",
+			""
+		});
+
+		byte[] responseBytes = Encoding.UTF8.GetBytes(headerStr);
+		await stream.WriteAsync(responseBytes, 0, responseBytes.Length, cancellationToken);
+		await stream.WriteAsync(crlf, 0, crlf.Length, cancellationToken);
+		await stream.FlushAsync(cancellationToken);
 	}
 
 	private Task WriteResponseAsync(HttpStatusCode statusCode, string contentType, string content, bool isHead = false)
