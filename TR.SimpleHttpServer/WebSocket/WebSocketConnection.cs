@@ -196,7 +196,7 @@ public class WebSocketConnection(
 	/// <summary>
 	/// Sends a pong frame
 	/// </summary>
-	public Task SendPongAsync(byte[] data, CancellationToken cancellationToken)
+	private Task SendPongAsync(byte[] data, CancellationToken cancellationToken)
 	{
 		ThrowIfDisposed();
 		return SendFrameAsync(new WebSocketFrame(true, WebSocketOpcode.Pong, data), cancellationToken);
