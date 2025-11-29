@@ -70,7 +70,7 @@ public class WebSocketConnection(
 		return frame.Opcode switch
 		{
 			WebSocketOpcode.Close => ProcessCloseFrame(frame),
-			WebSocketOpcode.Ping => await ProcessPingFrameAsync(frame, cancellationToken),
+			WebSocketOpcode.Ping => ProcessPingFrameAsync(frame, cancellationToken),
 			WebSocketOpcode.Pong => ProcessPongFrame(),
 			WebSocketOpcode.Continuation or WebSocketOpcode.Text or WebSocketOpcode.Binary
 				=> ProcessDataFrame(frame, currentMessageType, messageData),
@@ -98,10 +98,10 @@ public class WebSocketConnection(
 		return new FrameProcessResult { Message = message, IsComplete = true };
 	}
 
-	private async Task<FrameProcessResult> ProcessPingFrameAsync(WebSocketFrame frame, CancellationToken cancellationToken)
+	private FrameProcessResult ProcessPingFrameAsync(WebSocketFrame frame, CancellationToken cancellationToken)
 	{
-		// Respond with Pong
-		await SendPongAsync(frame.Payload, cancellationToken).ConfigureAwait(false);
+		// Respond with Pong without awaiting - it can complete in the background
+		_ = SendPongAsync(frame.Payload, cancellationToken);
 		return new FrameProcessResult { IsComplete = false };
 	}
 
