@@ -10,22 +10,19 @@ namespace TR.SimpleHttpServer;
 
 public delegate Task<HttpResponse> HttpConnectionHandler(HttpRequest request);
 
-public class HttpServer : IDisposable
+public class HttpServer(
+	IPAddress localAddress,
+	ushort port,
+	HttpConnectionHandler handler,
+	WebSocketHandler? webSocketHandler = null
+) : IDisposable
 {
 	public bool IsRunning => Listener.Server.IsBound;
-	public ushort Port { get; }
-	private TcpListener Listener { get; }
-	private HttpConnectionHandler Handler { get; }
-	private WebSocketHandler? WebSocketHandler { get; }
+	public ushort Port { get; } = port;
+	private TcpListener Listener { get; } = new TcpListener(localAddress, port);
+	private HttpConnectionHandler Handler { get; } = handler;
+	private WebSocketHandler? WebSocketHandler { get; } = webSocketHandler;
 	private CancellationTokenSource? CancellationTokenSource = null;
-
-	public HttpServer(IPAddress localAddress, ushort port, HttpConnectionHandler handler, WebSocketHandler? webSocketHandler = null)
-	{
-		Port = port;
-		Listener = new TcpListener(localAddress, port);
-		Handler = handler;
-		WebSocketHandler = webSocketHandler;
-	}
 
 	public HttpServer(ushort port, HttpConnectionHandler handler) : this(IPAddress.Any, port, handler, null) { }
 
@@ -41,7 +38,8 @@ public class HttpServer : IDisposable
 
 		CancellationTokenSource = new();
 		Listener.Start();
-		Task.Run(ListenTaskAsync).ContinueWith((task) => {
+		Task.Run(ListenTaskAsync).ContinueWith((task) =>
+		{
 			if (task.IsFaulted)
 			{
 				Console.Error.WriteLine(task.Exception);
@@ -95,11 +93,13 @@ public class HttpServer : IDisposable
 			}
 
 			_ = Task
-				.Run(async () => {
+				.Run(async () =>
+				{
 					using ProcessOneConnectionWorker worker = new(client, cancellationToken, Handler, WebSocketHandler);
 					await worker.ProcessAsync().ConfigureAwait(false);
 				}, cancellationToken)
-				.ContinueWith((task) => {
+				.ContinueWith((task) =>
+				{
 					if (task.IsFaulted)
 					{
 						Console.Error.WriteLine(task.Exception);

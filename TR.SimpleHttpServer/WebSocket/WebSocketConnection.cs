@@ -10,30 +10,21 @@ namespace TR.SimpleHttpServer.WebSocket;
 /// <summary>
 /// Represents an active WebSocket connection
 /// </summary>
-public class WebSocketConnection : IDisposable
+public class WebSocketConnection(
+	Stream stream
+) : IDisposable
 {
-	private readonly Stream _stream;
-	private readonly WebSocketFrameReader _frameReader;
+	private readonly Stream _stream = stream ?? throw new ArgumentNullException(nameof(stream));
+	private readonly WebSocketFrameReader _frameReader = new WebSocketFrameReader(stream);
 	private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
-	private bool _isOpen;
-	private bool _closeSent;
+	private bool _isOpen = true;
+	private bool _closeSent = false;
 	private bool _disposedValue;
 
 	/// <summary>
 	/// Gets whether the connection is currently open
 	/// </summary>
 	public bool IsOpen => _isOpen && !_disposedValue;
-
-	/// <summary>
-	/// Creates a new WebSocket connection over the given stream
-	/// </summary>
-	public WebSocketConnection(Stream stream)
-	{
-		_stream = stream ?? throw new ArgumentNullException(nameof(stream));
-		_frameReader = new WebSocketFrameReader(stream);
-		_isOpen = true;
-		_closeSent = false;
-	}
 
 	/// <summary>
 	/// Receives a message from the WebSocket connection

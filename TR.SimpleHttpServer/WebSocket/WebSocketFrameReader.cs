@@ -8,17 +8,11 @@ namespace TR.SimpleHttpServer.WebSocket;
 /// <summary>
 /// Reads WebSocket frames from a stream
 /// </summary>
-public class WebSocketFrameReader
+public class WebSocketFrameReader(
+	Stream stream
+)
 {
-	private readonly Stream _stream;
-
-	/// <summary>
-	/// Creates a new WebSocket frame reader
-	/// </summary>
-	public WebSocketFrameReader(Stream stream)
-	{
-		_stream = stream ?? throw new ArgumentNullException(nameof(stream));
-	}
+	private readonly Stream _stream = stream ?? throw new ArgumentNullException(nameof(stream));
 
 	/// <summary>
 	/// Reads a WebSocket frame from the stream
