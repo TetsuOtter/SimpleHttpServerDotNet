@@ -36,7 +36,7 @@ public class WebSocketConnection(
 		if (!_isOpen)
 			throw new InvalidOperationException("Connection is not open");
 
-		List<byte> messageData = new();
+		List<byte> messageData = [];
 		WebSocketOpcode? messageType = null;
 
 		while (true)
