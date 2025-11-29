@@ -4,19 +4,29 @@ using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 
+using TR.SimpleHttpServer.WebSocket;
+
 namespace TR.SimpleHttpServer;
 
 public delegate Task<HttpResponse> HttpConnectionHandler(HttpRequest request);
 
-public class HttpServer(IPAddress localAddress, ushort port, HttpConnectionHandler handler) : IDisposable
+public class HttpServer(
+	IPAddress localAddress,
+	ushort port,
+	HttpConnectionHandler handler,
+	WebSocketHandlerSelector? webSocketHandlerSelector = null
+) : IDisposable
 {
 	public bool IsRunning => Listener.Server.IsBound;
 	public ushort Port { get; } = port;
 	private TcpListener Listener { get; } = new TcpListener(localAddress, port);
 	private HttpConnectionHandler Handler { get; } = handler;
+	private WebSocketHandlerSelector? WebSocketHandlerSelector { get; } = webSocketHandlerSelector;
 	private CancellationTokenSource? CancellationTokenSource = null;
 
-	public HttpServer(ushort port, HttpConnectionHandler handler) : this(IPAddress.Any, port, handler) { }
+	public HttpServer(ushort port, HttpConnectionHandler handler) : this(IPAddress.Any, port, handler, null) { }
+
+	public HttpServer(ushort port, HttpConnectionHandler handler, WebSocketHandlerSelector webSocketHandlerSelector) : this(IPAddress.Any, port, handler, webSocketHandlerSelector) { }
 
 	public void Start()
 	{
@@ -28,7 +38,8 @@ public class HttpServer(IPAddress localAddress, ushort port, HttpConnectionHandl
 
 		CancellationTokenSource = new();
 		Listener.Start();
-		Task.Run(ListenTaskAsync).ContinueWith((task) => {
+		Task.Run(ListenTaskAsync).ContinueWith((task) =>
+		{
 			if (task.IsFaulted)
 			{
 				Console.Error.WriteLine(task.Exception);
@@ -82,11 +93,13 @@ public class HttpServer(IPAddress localAddress, ushort port, HttpConnectionHandl
 			}
 
 			_ = Task
-				.Run(async () => {
-					using ProcessOneConnectionWorker worker = new(client, cancellationToken, Handler);
+				.Run(async () =>
+				{
+					using ProcessOneConnectionWorker worker = new(client, cancellationToken, Handler, WebSocketHandlerSelector);
 					await worker.ProcessAsync().ConfigureAwait(false);
 				}, cancellationToken)
-				.ContinueWith((task) => {
+				.ContinueWith((task) =>
+				{
 					if (task.IsFaulted)
 					{
 						Console.Error.WriteLine(task.Exception);
