@@ -29,12 +29,12 @@ internal class ProcessOneConnectionWorker
 	/// <summary>
 	/// Socket linger timeout in seconds for graceful connection closure
 	/// </summary>
-	private const int SocketLingerTimeoutSeconds = 5;
+	private const int SOCKET_LINGER_TIMEOUT_SECONDS = 5;
 
 	public async Task ProcessAsync()
 	{
 		// Enable lingering to ensure data is transmitted before socket closes
-		client.LingerState = new System.Net.Sockets.LingerOption(true, SocketLingerTimeoutSeconds);
+		client.LingerState = new LingerOption(true, SOCKET_LINGER_TIMEOUT_SECONDS);
 		if (disposedValue)
 			throw new ObjectDisposedException(nameof(ProcessOneConnectionWorker));
 
@@ -181,8 +181,8 @@ internal class ProcessOneConnectionWorker
 		await WriteWebSocketUpgradeResponseAsync(secWebSocketKey);
 
 		// Remove timeouts for WebSocket connections (they can be long-lived)
-		stream.ReadTimeout = System.Threading.Timeout.Infinite;
-		stream.WriteTimeout = System.Threading.Timeout.Infinite;
+		stream.ReadTimeout = Timeout.Infinite;
+		stream.WriteTimeout = Timeout.Infinite;
 
 		// Create WebSocket connection and invoke handler
 		using (WebSocketConnection connection = new(stream))
@@ -203,7 +203,7 @@ internal class ProcessOneConnectionWorker
 			await stream.FlushAsync(cancellationToken);
 			// Gracefully shutdown the socket - this signals to the client that we're done sending
 			// but allows remaining data to be transmitted
-			client.Client.Shutdown(System.Net.Sockets.SocketShutdown.Send);
+			client.Client.Shutdown(SocketShutdown.Send);
 		}
 		catch
 		{
