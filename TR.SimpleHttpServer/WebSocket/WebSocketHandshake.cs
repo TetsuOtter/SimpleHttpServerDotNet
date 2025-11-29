@@ -59,11 +59,9 @@ public static class WebSocketHandshake
 			throw new ArgumentNullException(nameof(secWebSocketKey));
 
 		string combined = secWebSocketKey.Trim() + WebSocketGuid;
-		using (SHA1 sha1 = SHA1.Create())
-		{
-			byte[] hashBytes = sha1.ComputeHash(Encoding.UTF8.GetBytes(combined));
-			return Convert.ToBase64String(hashBytes);
-		}
+		using SHA1 sha1 = SHA1.Create();
+		byte[] hashBytes = sha1.ComputeHash(Encoding.UTF8.GetBytes(combined));
+		return Convert.ToBase64String(hashBytes);
 	}
 
 	/// <summary>
