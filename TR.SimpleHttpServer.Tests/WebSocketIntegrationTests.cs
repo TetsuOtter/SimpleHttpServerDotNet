@@ -293,10 +293,23 @@ public class WebSocketIntegrationTests : IDisposable
 		await stream.WriteAsync(requestBytes, 0, requestBytes.Length);
 		await stream.FlushAsync();
 
-		// Read response
+		// Read response - read until we get the complete response or timeout
+		StringBuilder responseBuilder = new();
 		byte[] buffer = new byte[1024];
-		int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
-		string response = Encoding.UTF8.GetString(buffer, 0, bytesRead);
+		int totalBytesRead = 0;
+		while (true)
+		{
+			int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
+			if (bytesRead == 0)
+				break;
+			totalBytesRead += bytesRead;
+			responseBuilder.Append(Encoding.UTF8.GetString(buffer, 0, bytesRead));
+			// Check if we have a complete HTTP response (headers + body)
+			string currentResponse = responseBuilder.ToString();
+			if (currentResponse.Contains("\r\n\r\n") && currentResponse.Contains("Hello"))
+				break;
+		}
+		string response = responseBuilder.ToString();
 
 		// Assert
 		Assert.Contains("HTTP/1.0 200 OK", response);
