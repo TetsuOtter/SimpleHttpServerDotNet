@@ -71,7 +71,7 @@ public static class WebSocketHandshake
 	/// </summary>
 	public static NameValueCollection CreateUpgradeResponseHeaders(string secWebSocketKey)
 	{
-		NameValueCollection headers = new NameValueCollection
+		NameValueCollection headers = new()
 		{
 			{ "Upgrade", "websocket" },
 			{ "Connection", "Upgrade" },

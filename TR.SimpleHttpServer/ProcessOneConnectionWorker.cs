@@ -185,7 +185,7 @@ internal class ProcessOneConnectionWorker
 		stream.WriteTimeout = System.Threading.Timeout.Infinite;
 
 		// Create WebSocket connection and invoke handler
-		using (WebSocketConnection connection = new WebSocketConnection(stream))
+		using (WebSocketConnection connection = new(stream))
 		{
 			try
 			{

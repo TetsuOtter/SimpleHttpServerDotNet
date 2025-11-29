@@ -15,8 +15,8 @@ public class WebSocketConnection(
 ) : IDisposable
 {
 	private readonly Stream _stream = stream ?? throw new ArgumentNullException(nameof(stream));
-	private readonly WebSocketFrameReader _frameReader = new WebSocketFrameReader(stream);
-	private readonly SemaphoreSlim _sendLock = new SemaphoreSlim(1, 1);
+	private readonly WebSocketFrameReader _frameReader = new(stream);
+	private readonly SemaphoreSlim _sendLock = new(1, 1);
 	private bool _isOpen = true;
 	private bool _closeSent = false;
 	private bool _disposedValue;
@@ -36,7 +36,7 @@ public class WebSocketConnection(
 		if (!_isOpen)
 			throw new InvalidOperationException("Connection is not open");
 
-		List<byte> messageData = new List<byte>();
+		List<byte> messageData = new();
 		WebSocketOpcode? messageType = null;
 
 		while (true)
