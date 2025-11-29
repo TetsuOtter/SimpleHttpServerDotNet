@@ -33,7 +33,10 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: Publish to NuGet with Trusted Publishing
+      # Uses NuGet Trusted Publishing with OIDC authentication
+      # Requires configuring trusted publisher on nuget.org
+      # See: https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing
+      - name: Publish to NuGet
         run: |
           dotnet nuget push ./nupkg/*.nupkg \
             --source https://api.nuget.org/v3/index.json \
