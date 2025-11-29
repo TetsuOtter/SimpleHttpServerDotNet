@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # id-token: write is included for future migration to NuGet Trusted Publishing
+      # See: https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing
       id-token: write
 
     steps:
@@ -33,12 +35,8 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      # Uses NuGet Trusted Publishing with OIDC authentication
-      # Requires configuring trusted publisher on nuget.org
-      # See: https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing
       - name: Publish to NuGet
         run: |
           dotnet nuget push ./nupkg/*.nupkg \
             --source https://api.nuget.org/v3/index.json \
             --api-key ${{ secrets.NUGET_USER }}
-
