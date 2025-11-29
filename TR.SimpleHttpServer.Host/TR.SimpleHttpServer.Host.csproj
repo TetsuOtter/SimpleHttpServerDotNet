@@ -10,4 +10,8 @@
 		<ProjectReference Include="..\TR.SimpleHttpServer\TR.SimpleHttpServer.csproj" />
 	</ItemGroup>
 
+	<ItemGroup>
+		<EmbeddedResource Include="Resources\*.html" />
+	</ItemGroup>
+
 </Project>

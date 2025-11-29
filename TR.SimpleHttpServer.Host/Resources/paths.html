@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple HTTP Server - Path Demo</title>
+    <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        h1 { color: #333; }
+        .path-info { background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 10px 0; }
+        ul { line-height: 2; }
+        a { color: #0066cc; }
+        code { background: #eee; padding: 2px 6px; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <h1>Path-based Routing Demo</h1>
+    <div class="path-info">
+        <p>Current path: <code id="currentPath"></code></p>
+    </div>
+    <h2>Try Different Paths</h2>
+    <ul>
+        <li><a href="/">/</a> - Home page</li>
+        <li><a href="/paths">/paths</a> - This page</li>
+        <li><a href="/chat">/chat</a> - WebSocket Chat</li>
+        <li><a href="/api/test">/api/test</a> - API test endpoint</li>
+        <li><a href="/hello/world">/hello/world</a> - Custom path example</li>
+    </ul>
+    <script>
+        document.getElementById('currentPath').textContent = window.location.pathname;
+    </script>
+</body>
+</html>
