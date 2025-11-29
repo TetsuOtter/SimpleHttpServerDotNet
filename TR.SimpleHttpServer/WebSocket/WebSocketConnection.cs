@@ -78,7 +78,7 @@ public class WebSocketConnection(
 			// Handle data frames
 			if (frame.Opcode == WebSocketOpcode.Continuation)
 			{
-				if (messageType == null)
+				if (messageType is null)
 					throw new InvalidOperationException("Received continuation frame without initial frame");
 			}
 			else

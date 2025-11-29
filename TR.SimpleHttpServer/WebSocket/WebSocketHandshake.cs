@@ -20,7 +20,7 @@ public static class WebSocketHandshake
 	/// </summary>
 	public static bool IsWebSocketUpgradeRequest(HttpRequest request)
 	{
-		if (request == null)
+		if (request is null)
 			return false;
 
 		// Must be GET method
