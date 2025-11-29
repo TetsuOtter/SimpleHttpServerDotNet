@@ -43,63 +43,109 @@ public class WebSocketConnection(
 		{
 			WebSocketFrame frame = await _frameReader.ReadFrameAsync(cancellationToken).ConfigureAwait(false);
 
-			// Handle control frames immediately
-			if (frame.Opcode == WebSocketOpcode.Close)
+			var result = await ProcessFrameAsync(frame, messageType, messageData, cancellationToken).ConfigureAwait(false);
+
+			if (result.IsComplete)
 			{
-				_isOpen = false;
-				WebSocketCloseStatus? closeStatus = null;
-				string closeReason = "";
-
-				if (frame.Payload.Length >= 2)
-				{
-					closeStatus = (WebSocketCloseStatus)((frame.Payload[0] << 8) | frame.Payload[1]);
-					if (frame.Payload.Length > 2)
-					{
-						closeReason = Encoding.UTF8.GetString(frame.Payload, 2, frame.Payload.Length - 2);
-					}
-				}
-
-				return new WebSocketMessage(WebSocketMessageType.Close, Array.Empty<byte>(), closeStatus, closeReason);
+				return result.Message!;
 			}
 
-			if (frame.Opcode == WebSocketOpcode.Ping)
+			if (result.UpdatedMessageType.HasValue)
 			{
-				// Respond with Pong
-				await SendPongAsync(frame.Payload, cancellationToken).ConfigureAwait(false);
-				continue;
-			}
-
-			if (frame.Opcode == WebSocketOpcode.Pong)
-			{
-				// Pong received, continue waiting for data frames
-				continue;
-			}
-
-			// Handle data frames
-			if (frame.Opcode == WebSocketOpcode.Continuation)
-			{
-				if (messageType is null)
-					throw new InvalidOperationException("Received continuation frame without initial frame");
-			}
-			else
-			{
-				// This is the first frame of a new message
-				messageType = frame.Opcode;
-			}
-
-			// Accumulate payload
-			messageData.AddRange(frame.Payload);
-
-			// If this is the final frame, return the message
-			if (frame.IsFinal)
-			{
-				WebSocketMessageType type = messageType == WebSocketOpcode.Text
-					? WebSocketMessageType.Text
-					: WebSocketMessageType.Binary;
-
-				return new WebSocketMessage(type, [.. messageData]);
+				messageType = result.UpdatedMessageType;
 			}
 		}
+	}
+
+	/// <summary>
+	/// Processes a single WebSocket frame
+	/// </summary>
+	private async Task<FrameProcessResult> ProcessFrameAsync(
+		WebSocketFrame frame,
+		WebSocketOpcode? currentMessageType,
+		List<byte> messageData,
+		CancellationToken cancellationToken
+	)
+	{
+		return frame.Opcode switch
+		{
+			WebSocketOpcode.Close => ProcessCloseFrame(frame),
+			WebSocketOpcode.Ping => await ProcessPingFrameAsync(frame, cancellationToken),
+			WebSocketOpcode.Pong => ProcessPongFrame(),
+			WebSocketOpcode.Continuation or WebSocketOpcode.Text or WebSocketOpcode.Binary
+				=> ProcessDataFrame(frame, currentMessageType, messageData),
+
+			_ => throw new InvalidOperationException($"Unknown opcode: {frame.Opcode}")
+		};
+	}
+
+	private FrameProcessResult ProcessCloseFrame(WebSocketFrame frame)
+	{
+		_isOpen = false;
+		WebSocketCloseStatus? closeStatus = null;
+		string closeReason = "";
+
+		if (frame.Payload.Length >= 2)
+		{
+			closeStatus = (WebSocketCloseStatus)((frame.Payload[0] << 8) | frame.Payload[1]);
+			if (frame.Payload.Length > 2)
+			{
+				closeReason = Encoding.UTF8.GetString(frame.Payload, 2, frame.Payload.Length - 2);
+			}
+		}
+
+		var message = new WebSocketMessage(WebSocketMessageType.Close, Array.Empty<byte>(), closeStatus, closeReason);
+		return new FrameProcessResult { Message = message, IsComplete = true };
+	}
+
+	private async Task<FrameProcessResult> ProcessPingFrameAsync(WebSocketFrame frame, CancellationToken cancellationToken)
+	{
+		// Respond with Pong
+		await SendPongAsync(frame.Payload, cancellationToken).ConfigureAwait(false);
+		return new FrameProcessResult { IsComplete = false };
+	}
+
+	private FrameProcessResult ProcessPongFrame()
+	{
+		// Pong received, continue waiting for data frames
+		return new FrameProcessResult { IsComplete = false };
+	}
+
+	private FrameProcessResult ProcessDataFrame(WebSocketFrame frame, WebSocketOpcode? messageType, List<byte> messageData)
+	{
+		if (frame.Opcode == WebSocketOpcode.Continuation)
+		{
+			if (messageType is null)
+				throw new InvalidOperationException("Received continuation frame without initial frame");
+		}
+		else
+		{
+			// This is the first frame of a new message
+			messageType = frame.Opcode;
+		}
+
+		// Accumulate payload
+		messageData.AddRange(frame.Payload);
+
+		// If this is the final frame, return the message
+		if (frame.IsFinal)
+		{
+			WebSocketMessageType type = messageType == WebSocketOpcode.Text
+				? WebSocketMessageType.Text
+				: WebSocketMessageType.Binary;
+
+			var message = new WebSocketMessage(type, [.. messageData]);
+			return new FrameProcessResult { Message = message, IsComplete = true };
+		}
+
+		return new FrameProcessResult { IsComplete = false, UpdatedMessageType = messageType };
+	}
+
+	private class FrameProcessResult
+	{
+		public WebSocketMessage? Message { get; set; }
+		public bool IsComplete { get; set; }
+		public WebSocketOpcode? UpdatedMessageType { get; set; }
 	}
 
 	/// <summary>
