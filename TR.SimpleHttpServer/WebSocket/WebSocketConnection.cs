@@ -27,6 +27,16 @@ public class WebSocketConnection(
 	public bool IsOpen => _isOpen && !_disposedValue;
 
 	/// <summary>
+	/// Occurs when a ping frame is received
+	/// </summary>
+	public event EventHandler<PingPongEventArgs>? PingReceived;
+
+	/// <summary>
+	/// Occurs when a pong frame is received
+	/// </summary>
+	public event EventHandler<PingPongEventArgs>? PongReceived;
+
+	/// <summary>
 	/// Receives a message from the WebSocket connection
 	/// </summary>
 	public async Task<WebSocketMessage> ReceiveMessageAsync(CancellationToken cancellationToken)
@@ -71,7 +81,7 @@ public class WebSocketConnection(
 		{
 			WebSocketOpcode.Close => ProcessCloseFrame(frame),
 			WebSocketOpcode.Ping => ProcessPingFrameAsync(frame, cancellationToken),
-			WebSocketOpcode.Pong => ProcessPongFrame(),
+			WebSocketOpcode.Pong => ProcessPongFrame(frame),
 			WebSocketOpcode.Continuation or WebSocketOpcode.Text or WebSocketOpcode.Binary
 				=> ProcessDataFrame(frame, currentMessageType, messageData),
 
@@ -102,11 +112,18 @@ public class WebSocketConnection(
 	{
 		// Respond with Pong without awaiting - it can complete in the background
 		_ = SendPongAsync(frame.Payload, cancellationToken);
+
+		// Invoke PingReceived event
+		PingReceived?.Invoke(this, new PingPongEventArgs(frame.Payload));
+
 		return new FrameProcessResult { IsComplete = false };
 	}
 
-	private FrameProcessResult ProcessPongFrame()
+	private FrameProcessResult ProcessPongFrame(WebSocketFrame frame)
 	{
+		// Invoke PongReceived event
+		PongReceived?.Invoke(this, new PingPongEventArgs(frame.Payload));
+
 		// Pong received, continue waiting for data frames
 		return new FrameProcessResult { IsComplete = false };
 	}
@@ -252,4 +269,15 @@ public class WebSocketConnection(
 		GC.SuppressFinalize(this);
 	}
 	#endregion
+}
+
+/// <summary>
+/// Event arguments for ping/pong frame reception events
+/// </summary>
+public class PingPongEventArgs(byte[] payload) : EventArgs
+{
+	/// <summary>
+	/// Gets the payload data from the ping/pong frame
+	/// </summary>
+	public byte[] Payload { get; } = payload;
 }
