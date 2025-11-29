@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Concurrent;
-using System.Collections.Specialized;
 using System.IO;
 using System.Net;
 using System.Reflection;
@@ -238,9 +237,8 @@ class Program : IDisposable
 	static async Task BroadcastMessage(ChatMessage message)
 	{
 		string json = JsonSerializer.Serialize(message);
-		var clientsCopy = chatClients.ToArray();
 
-		foreach (var kvp in clientsCopy)
+		foreach (var kvp in chatClients)
 		{
 			try
 			{
@@ -248,10 +246,17 @@ class Program : IDisposable
 				{
 					await kvp.Value.Connection.SendTextAsync(json, CancellationToken.None);
 				}
+				else
+				{
+					// Remove disconnected client
+					chatClients.TryRemove(kvp.Key, out _);
+				}
 			}
 			catch (Exception ex)
 			{
 				Console.WriteLine($"Error broadcasting to {kvp.Value.Name}: {ex.Message}");
+				// Remove failed client
+				chatClients.TryRemove(kvp.Key, out _);
 			}
 		}
 	}
