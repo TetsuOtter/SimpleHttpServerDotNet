@@ -15,7 +15,7 @@ public static class WebSocketHandshake
 	/// <summary>
 	/// WebSocket GUID used for handshake (RFC 6455)
 	/// </summary>
-	private const string WebSocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+	private const string WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 	/// <summary>
 	/// Checks if the HTTP request is a WebSocket upgrade request
@@ -60,7 +60,7 @@ public static class WebSocketHandshake
 		if (string.IsNullOrEmpty(secWebSocketKey))
 			throw new ArgumentNullException(nameof(secWebSocketKey));
 
-		string combined = secWebSocketKey.Trim() + WebSocketGuid;
+		string combined = secWebSocketKey.Trim() + WEBSOCKET_GUID;
 		using SHA1 sha1 = SHA1.Create();
 		byte[] hashBytes = sha1.ComputeHash(Encoding.UTF8.GetBytes(combined));
 		return Convert.ToBase64String(hashBytes);
