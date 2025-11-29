@@ -1,0 +1,51 @@
+name: Push to NuGet
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g., 1.0.0)"
+        required: true
+        type: string
+
+env:
+  DOTNET_VERSION: "10.0.x"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # id-token: write is included for future migration to NuGet Trusted Publishing
+      # See: https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing
+      id-token: write
+
+    steps:
+      - name: Download nupkg from Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "v${{ inputs.version }}" \
+            --repo ${{ github.repository }} \
+            --pattern "*.nupkg" \
+            --dir ./nupkg
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      # Get a short-lived NuGet API key
+      - name: NuGet login (OIDC → temp API key)
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      # Push the package
+      - name: NuGet push
+        run: >
+          dotnet nuget push
+          ./nupkg/*.nupkg
+          --api-key ${{steps.login.outputs.NUGET_API_KEY}}
+          --source https://api.nuget.org/v3/index.json

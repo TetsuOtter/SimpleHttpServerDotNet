@@ -8,6 +8,9 @@ insert_final_newline = true
 charset = utf-8
 trim_trailing_whitespace = true
 
+[*.{yaml,yml}]
+indent_style = space
+
 [*.cs]
 dotnet_sort_system_directives_first = true
 dotnet_separate_import_directive_groups = true

@@ -1,0 +1,84 @@
+name: Tagging & Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "TR.SimpleHttpServer/TR.SimpleHttpServer.csproj"
+
+env:
+  DOTNET_VERSION: "10.0.x"
+  PROJECT_PATH: "TR.SimpleHttpServer/TR.SimpleHttpServer.csproj"
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      tag: ${{ steps.get_version.outputs.tag }}
+      should-release: ${{ steps.check_tag.outputs.should-release }}
+
+    steps:
+      - name: Checkout csproj file
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: ${{ env.PROJECT_PATH }}
+          sparse-checkout-cone-mode: false
+
+      - name: Extract version from csproj
+        id: get_version
+        run: |
+          VERSION=$(grep -oP '(?<=<Version>)[^<]+' "${{ env.PROJECT_PATH }}")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check if tag exists
+        id: check_tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "v${{ steps.get_version.outputs.version }}" >/dev/null 2>&1; then
+            echo "should-release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should-release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build-and-release:
+    needs: check-version
+    if: needs.check-version.outputs.should-release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Build and Pack
+        run: |
+          dotnet restore
+          dotnet build --configuration Release --no-restore
+          dotnet pack ${{ env.PROJECT_PATH }} --configuration Release --no-build --output ./nupkg
+
+      - name: Create Tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ needs.check-version.outputs.tag }}
+          git push origin ${{ needs.check-version.outputs.tag }}
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create ${{ needs.check-version.outputs.tag }} \
+            --title "Release ${{ needs.check-version.outputs.tag }}" \
+            --draft \
+            --generate-notes \
+            ./nupkg/*.nupkg
