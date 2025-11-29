@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,13 +16,18 @@ internal class ProcessOneConnectionWorker
 (
 	TcpClient client,
 	CancellationToken cancellationToken,
-	HttpConnectionHandler handler
+	HttpConnectionHandler handler,
+	WebSocketRequestHandler? canUpgradeToWebSocket,
+	WebSocketHandler? webSocketHandler
 ) : IDisposable
 {
 	private readonly TcpClient client = client;
 	private readonly NetworkStream stream = client.GetStream();
 	private readonly CancellationToken cancellationToken = cancellationToken;
 	private readonly HttpConnectionHandler handler = handler;
+	private readonly WebSocketRequestHandler? CanUpgradeToWebSocket = canUpgradeToWebSocket;
+	private readonly WebSocketHandler? WebSocketHandler = webSocketHandler;
+	bool isWebSocket = false;
 
 	public async Task ProcessAsync()
 	{
@@ -36,7 +43,8 @@ internal class ProcessOneConnectionWorker
 		stream.WriteTimeout = 2000;
 		MyStreamReader reader = new(stream, cancellationToken, Encoding.UTF8);
 		await ProcessAsync(reader);
-		await stream.FlushAsync(cancellationToken);
+		if (!isWebSocket)
+			await stream.FlushAsync(cancellationToken);
 	}
 
 	private async Task ProcessAsync(MyStreamReader reader)
@@ -128,17 +136,69 @@ internal class ProcessOneConnectionWorker
 		}
 
 		NameValueCollection queryString = HttpUtility.ParseQueryString(query);
-		HttpRequest request = new(method, path, headers, queryString, body);
+		HttpRequest request = new(httpVersion, method, path, headers, queryString, body);
 		try
 		{
-			HttpResponse response = await handler(request);
+			HttpResponse? webSocketResponse = await CheckAndProcessWebSocketAsync(request);
+			HttpResponse response = webSocketResponse ?? await handler(request);
 			await WriteResponseAsync(response, isHead: isHeadMethod);
+			isWebSocket = webSocketResponse?.StatusCode == HttpStatusCode.SwitchingProtocols;
+			if (!isWebSocket)
+				return;
 		}
 		catch (Exception ex)
 		{
 			await WriteResponseAsync(HttpStatusCode.InternalServerError, "text/plain", ex.ToString());
 			return;
 		}
+
+		System.Net.WebSockets.WebSocket ws = System.Net.WebSockets.WebSocket.CreateClientWebSocket(
+			stream,
+			request.Headers.GetValues("Sec-WebSocket-Protocol").FirstOrDefault() ?? string.Empty,
+			1024,
+			1024,
+			TimeSpan.FromSeconds(30),
+			true,
+			System.Net.WebSockets.WebSocket.CreateClientBuffer(1024, 1024)
+		);
+		using MyWebSocket webSocket = new(client);
+		await WebSocketHandler!(request, webSocket);
+	}
+
+	private async Task<HttpResponse?> CheckAndProcessWebSocketAsync(HttpRequest request)
+	{
+		bool hasUpgradeHeader = request.Headers.GetValues("Upgrade").Contains("websocket");
+		bool hasConnectionHeader = request.Headers.GetValues("Connection").Contains("Upgrade");
+		bool hasWebSocketVersion = request.Headers.GetValues("Sec-WebSocket-Version").Any();
+		bool hasWebSocketKey = request.Headers.GetValues("Sec-WebSocket-Key").Any();
+
+		if (!hasUpgradeHeader && !hasConnectionHeader && !hasWebSocketVersion && !hasWebSocketKey)
+			return null;
+		if (!hasUpgradeHeader || !hasConnectionHeader || !hasWebSocketVersion || !hasWebSocketKey)
+			return new(HttpStatusCode.BadRequest, "text/plain", [], "Bad Request (invalid WebSocket request)");
+		if (request.Version != "HTTP/1.1")
+			return new(HttpStatusCode.BadRequest, "text/plain", [], "Bad Request (invalid HTTP version for WebSocket request)");
+		if (request.Method != "GET")
+			return new(HttpStatusCode.MethodNotAllowed, "text/plain", [], "Method Not Allowed (WebSocket request must be GET)");
+		if (request.Headers.GetValues("Sec-WebSocket-Version").Length != 1)
+			return new(HttpStatusCode.BadRequest, "text/plain", [], "Bad Request (invalid WebSocket version)");
+		if (request.Headers.GetValues("Sec-WebSocket-Version")[0] != "13")
+			return new(HttpStatusCode.BadRequest, "text/plain", [], "Bad Request (invalid WebSocket version)");
+		if (request.Headers.GetValues("Sec-WebSocket-Key").Length != 1)
+			return new(HttpStatusCode.BadRequest, "text/plain", [], "Bad Request (invalid WebSocket key)");
+		if (request.Headers.GetValues("Sec-WebSocket-Key")[0].Length != 24)
+			return new(HttpStatusCode.BadRequest, "text/plain", [], "Bad Request (invalid WebSocket key)");
+		if (CanUpgradeToWebSocket is null || WebSocketHandler is null)
+			return new(HttpStatusCode.NotImplemented, "text/plain", [], "Not Implemented (WebSocket is not supported)");
+
+		HttpResponse acceptWebSocketResponse = new(HttpStatusCode.SwitchingProtocols, "text/plain", [], string.Empty);
+		acceptWebSocketResponse.AdditionalHeaders.Add("Upgrade", "websocket");
+		acceptWebSocketResponse.AdditionalHeaders.Add("Connection", "Upgrade");
+		string secWebSocketAccept = Convert.ToBase64String(SHA1.Create().ComputeHash(Encoding.UTF8.GetBytes(request.Headers.GetValues("Sec-WebSocket-Key").First() + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")));
+		acceptWebSocketResponse.AdditionalHeaders.Add("Sec-WebSocket-Accept", secWebSocketAccept);
+		acceptWebSocketResponse.Version = "HTTP/1.1";
+
+		return await CanUpgradeToWebSocket(request, acceptWebSocketResponse);
 	}
 
 	private Task WriteResponseAsync(HttpStatusCode statusCode, string contentType, string content, bool isHead = false)
@@ -174,14 +234,15 @@ internal class ProcessOneConnectionWorker
 
 	private Task WriteResponseAsync(HttpResponse response, bool isHead = false)
 	{
-		string[] commonHeaders = [
-			$"HTTP/1.0 {response.Status}",
+		List<string> commonHeaders = [
+			$"{response.Version} {response.Status}",
 			$"Server: {typeof(HttpServer).FullName}",
 			$"Content-Type: {response.ContentType}; charset=UTF-8",
 			$"Content-Length: {response.Body.Length}",
 			$"Date: {DateTime.UtcNow:R}",
-			$"Connection: close"
 		];
+		if (response.StatusCode != HttpStatusCode.SwitchingProtocols)
+			commonHeaders.Add("Connection: close");
 
 		string headerStr = string.Join(
 			crlfStr,
