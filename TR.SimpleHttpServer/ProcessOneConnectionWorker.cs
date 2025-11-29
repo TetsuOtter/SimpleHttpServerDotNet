@@ -223,7 +223,7 @@ internal class ProcessOneConnectionWorker
 	{
 		NameValueCollection headers = WebSocketHandshake.CreateUpgradeResponseHeaders(secWebSocketKey);
 
-		string headerStr = string.Join(crlfStr, new[] {
+		string headerStr = string.Join(crlfStr, new string[] {
 			"HTTP/1.1 101 Switching Protocols",
 			$"Server: {typeof(HttpServer).FullName}",
 			$"Date: {DateTime.UtcNow:R}",
@@ -234,8 +234,13 @@ internal class ProcessOneConnectionWorker
 		});
 
 		byte[] responseBytes = Encoding.UTF8.GetBytes(headerStr);
+#if NETSTANDARD2_1_OR_GREATER || NET8_0_OR_GREATER
+		await stream.WriteAsync(responseBytes.AsMemory(), cancellationToken);
+		await stream.WriteAsync(crlf.AsMemory(), cancellationToken);
+#else
 		await stream.WriteAsync(responseBytes, 0, responseBytes.Length, cancellationToken);
 		await stream.WriteAsync(crlf, 0, crlf.Length, cancellationToken);
+#endif
 		await stream.FlushAsync(cancellationToken);
 	}
 
@@ -247,7 +252,7 @@ internal class ProcessOneConnectionWorker
 
 	private Task WriteResponseAsync(string status, string contentType, byte[] content, bool isHead = false)
 	{
-		string headerStr = string.Join(crlfStr, [
+		string headerStr = string.Join(crlfStr, new string[] {
 			$"HTTP/1.0 {status}",
 			$"Server: {typeof(HttpServer).FullName}",
 			$"Content-Type: {contentType}; charset=UTF-8",
@@ -255,31 +260,38 @@ internal class ProcessOneConnectionWorker
 			$"Date: {DateTime.UtcNow:R}",
 			$"Connection: close",
 			""
-		]);
+		});
 
 		return WriteResponseAsync(Encoding.UTF8.GetBytes(headerStr), content, isHead);
 	}
 
 	private static readonly string crlfStr = "\r\n";
-	private static readonly byte[] crlf = [(byte)'\r', (byte)'\n'];
+	private static readonly byte[] crlf = new byte[] { (byte)'\r', (byte)'\n' };
 	private async Task WriteResponseAsync(byte[] header, byte[] content, bool isHead = false)
 	{
+#if NETSTANDARD2_1_OR_GREATER || NET8_0_OR_GREATER
+		await stream.WriteAsync(header.AsMemory(), cancellationToken);
+		await stream.WriteAsync(crlf.AsMemory(), cancellationToken);
+		if (!isHead && 0 < content.Length)
+			await stream.WriteAsync(content.AsMemory(), cancellationToken);
+#else
 		await stream.WriteAsync(header, 0, header.Length, cancellationToken);
 		await stream.WriteAsync(crlf, 0, crlf.Length, cancellationToken);
 		if (!isHead && 0 < content.Length)
 			await stream.WriteAsync(content, 0, content.Length, cancellationToken);
+#endif
 	}
 
 	private Task WriteResponseAsync(HttpResponse response, bool isHead = false)
 	{
-		string[] commonHeaders = [
+		string[] commonHeaders = new string[] {
 			$"HTTP/1.0 {response.Status}",
 			$"Server: {typeof(HttpServer).FullName}",
 			$"Content-Type: {response.ContentType}; charset=UTF-8",
 			$"Content-Length: {response.Body.Length}",
 			$"Date: {DateTime.UtcNow:R}",
 			$"Connection: close"
-		];
+		};
 
 		List<string> allHeaders = new(commonHeaders.Length + response.AdditionalHeaders.Count + 1);
 		allHeaders.AddRange(commonHeaders);

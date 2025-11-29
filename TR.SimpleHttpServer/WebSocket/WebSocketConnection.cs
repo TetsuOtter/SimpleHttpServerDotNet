@@ -234,7 +234,11 @@ public class WebSocketConnection(
 		try
 		{
 			byte[] frameBytes = frame.ToBytes();
+#if NETSTANDARD2_1_OR_GREATER || NET8_0_OR_GREATER
+			await _stream.WriteAsync(frameBytes.AsMemory(), cancellationToken).ConfigureAwait(false);
+#else
 			await _stream.WriteAsync(frameBytes, 0, frameBytes.Length, cancellationToken).ConfigureAwait(false);
+#endif
 			await _stream.FlushAsync(cancellationToken).ConfigureAwait(false);
 		}
 		finally

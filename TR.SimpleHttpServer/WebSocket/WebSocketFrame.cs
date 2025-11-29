@@ -105,7 +105,11 @@ public class WebSocketFrame
 		// Masking key (if masked)
 		if (IsMasked)
 		{
+#if NETSTANDARD2_1_OR_GREATER || NET8_0_OR_GREATER
+			MaskingKey.AsSpan().CopyTo(frame.AsSpan(offset));
+#else
 			Array.Copy(MaskingKey, 0, frame, offset, 4);
+#endif
 			offset += 4;
 		}
 
@@ -119,7 +123,11 @@ public class WebSocketFrame
 		}
 		else
 		{
+#if NETSTANDARD2_1_OR_GREATER || NET8_0_OR_GREATER
+			Payload.AsSpan().CopyTo(frame.AsSpan(offset));
+#else
 			Array.Copy(Payload, 0, frame, offset, payloadLength);
+#endif
 		}
 
 		return frame;
@@ -134,10 +142,24 @@ public class WebSocketFrame
 			throw new ArgumentException("Masking key must be 4 bytes", nameof(maskingKey));
 
 		byte[] result = new byte[data.Length];
+#if NETSTANDARD2_1_OR_GREATER || NET8_0_OR_GREATER
+		ApplyMaskCore(data.AsSpan(), maskingKey.AsSpan(), result.AsSpan());
+#else
 		for (int i = 0; i < data.Length; i++)
 		{
 			result[i] = (byte)(data[i] ^ maskingKey[i % 4]);
 		}
+#endif
 		return result;
 	}
+
+#if NETSTANDARD2_1_OR_GREATER || NET8_0_OR_GREATER
+	private static void ApplyMaskCore(ReadOnlySpan<byte> data, ReadOnlySpan<byte> maskingKey, Span<byte> result)
+	{
+		for (int i = 0; i < data.Length; i++)
+		{
+			result[i] = (byte)(data[i] ^ maskingKey[i % 4]);
+		}
+	}
+#endif
 }

@@ -77,7 +77,11 @@ public class WebSocketFrameReader(
 		int totalRead = 0;
 		while (totalRead < count)
 		{
+#if NETSTANDARD2_1_OR_GREATER || NET8_0_OR_GREATER
+			int bytesRead = await _stream.ReadAsync(buffer.AsMemory(offset + totalRead, count - totalRead), cancellationToken).ConfigureAwait(false);
+#else
 			int bytesRead = await _stream.ReadAsync(buffer, offset + totalRead, count - totalRead, cancellationToken).ConfigureAwait(false);
+#endif
 			if (bytesRead == 0)
 			{
 				throw new EndOfStreamException("Unexpected end of stream while reading WebSocket frame");
