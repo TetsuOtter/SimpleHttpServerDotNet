@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -8,6 +9,7 @@ namespace TR.SimpleHttpServer.WebSocket;
 /// <summary>
 /// Handles WebSocket handshake processing
 /// </summary>
+[EditorBrowsable(EditorBrowsableState.Never)]
 public static class WebSocketHandshake
 {
 	/// <summary>

@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -8,6 +9,7 @@ namespace TR.SimpleHttpServer.WebSocket;
 /// <summary>
 /// Reads WebSocket frames from a stream
 /// </summary>
+[EditorBrowsable(EditorBrowsableState.Never)]
 public class WebSocketFrameReader(
 	Stream stream
 )

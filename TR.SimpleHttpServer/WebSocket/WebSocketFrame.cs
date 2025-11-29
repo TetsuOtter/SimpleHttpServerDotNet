@@ -1,10 +1,12 @@
 using System;
+using System.ComponentModel;
 
 namespace TR.SimpleHttpServer.WebSocket;
 
 /// <summary>
 /// Represents a WebSocket frame (RFC 6455)
 /// </summary>
+[EditorBrowsable(EditorBrowsableState.Never)]
 public class WebSocketFrame
 {
 	/// <summary>
