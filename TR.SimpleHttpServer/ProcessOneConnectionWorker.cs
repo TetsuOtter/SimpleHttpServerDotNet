@@ -17,14 +17,14 @@ internal class ProcessOneConnectionWorker
 	TcpClient client,
 	CancellationToken cancellationToken,
 	HttpConnectionHandler handler,
-	WebSocketHandler? webSocketHandler
+	WebSocketHandlerSelector? webSocketHandlerSelector
 ) : IDisposable
 {
 	private readonly TcpClient client = client;
 	private readonly NetworkStream stream = client.GetStream();
 	private readonly CancellationToken cancellationToken = cancellationToken;
 	private readonly HttpConnectionHandler handler = handler;
-	private readonly WebSocketHandler? webSocketHandler = webSocketHandler;
+	private readonly WebSocketHandlerSelector? webSocketHandlerSelector = webSocketHandlerSelector;
 
 	/// <summary>
 	/// Socket linger timeout in seconds for graceful connection closure
@@ -142,11 +142,11 @@ internal class ProcessOneConnectionWorker
 		HttpRequest request = new(method, path, headers, queryString, body);
 
 		// Check for WebSocket upgrade request
-		if (webSocketHandler != null && WebSocketHandshake.IsWebSocketUpgradeRequest(request))
+		if (webSocketHandlerSelector is not null && WebSocketHandshake.IsWebSocketUpgradeRequest(request))
 		{
 			try
 			{
-				await HandleWebSocketUpgradeAsync(request);
+				await HandleWebSocketUpgradeAsync(request, webSocketHandlerSelector);
 			}
 			catch (Exception ex)
 			{
@@ -167,8 +167,16 @@ internal class ProcessOneConnectionWorker
 		}
 	}
 
-	private async Task HandleWebSocketUpgradeAsync(HttpRequest request)
+	private async Task HandleWebSocketUpgradeAsync(HttpRequest request, WebSocketHandlerSelector handlerSelector)
 	{
+		// Get the handler for this path
+		var connectionHandler = await handlerSelector(request.Path);
+		if (connectionHandler is null)
+		{
+			await WriteResponseAsync(HttpStatusCode.NotFound, "text/plain", "WebSocket endpoint not found");
+			return;
+		}
+
 		// Get the WebSocket key
 		string secWebSocketKey = WebSocketHandshake.GetSecWebSocketKey(request);
 		if (string.IsNullOrEmpty(secWebSocketKey))
@@ -189,7 +197,7 @@ internal class ProcessOneConnectionWorker
 		{
 			try
 			{
-				await webSocketHandler!(request, connection);
+				await connectionHandler(request, connection);
 			}
 			catch (System.IO.EndOfStreamException)
 			{

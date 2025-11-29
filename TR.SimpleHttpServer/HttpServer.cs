@@ -14,19 +14,19 @@ public class HttpServer(
 	IPAddress localAddress,
 	ushort port,
 	HttpConnectionHandler handler,
-	WebSocketHandler? webSocketHandler = null
+	WebSocketHandlerSelector? webSocketHandlerSelector = null
 ) : IDisposable
 {
 	public bool IsRunning => Listener.Server.IsBound;
 	public ushort Port { get; } = port;
 	private TcpListener Listener { get; } = new TcpListener(localAddress, port);
 	private HttpConnectionHandler Handler { get; } = handler;
-	private WebSocketHandler? WebSocketHandler { get; } = webSocketHandler;
+	private WebSocketHandlerSelector? WebSocketHandlerSelector { get; } = webSocketHandlerSelector;
 	private CancellationTokenSource? CancellationTokenSource = null;
 
 	public HttpServer(ushort port, HttpConnectionHandler handler) : this(IPAddress.Any, port, handler, null) { }
 
-	public HttpServer(ushort port, HttpConnectionHandler handler, WebSocketHandler webSocketHandler) : this(IPAddress.Any, port, handler, webSocketHandler) { }
+	public HttpServer(ushort port, HttpConnectionHandler handler, WebSocketHandlerSelector webSocketHandlerSelector) : this(IPAddress.Any, port, handler, webSocketHandlerSelector) { }
 
 	public void Start()
 	{
@@ -95,7 +95,7 @@ public class HttpServer(
 			_ = Task
 				.Run(async () =>
 				{
-					using ProcessOneConnectionWorker worker = new(client, cancellationToken, Handler, WebSocketHandler);
+					using ProcessOneConnectionWorker worker = new(client, cancellationToken, Handler, WebSocketHandlerSelector);
 					await worker.ProcessAsync().ConfigureAwait(false);
 				}, cancellationToken)
 				.ContinueWith((task) =>

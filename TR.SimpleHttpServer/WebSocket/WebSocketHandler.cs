@@ -9,3 +9,10 @@ namespace TR.SimpleHttpServer.WebSocket;
 /// <param name="connection">The WebSocket connection</param>
 /// <returns>A task that completes when the WebSocket handler is done</returns>
 public delegate Task WebSocketHandler(HttpRequest request, WebSocketConnection connection);
+
+/// <summary>
+/// Delegate for selecting a WebSocket handler based on the request path
+/// </summary>
+/// <param name="path">The request path to match against</param>
+/// <returns>A handler function for the connection, or null if the path is not handled</returns>
+public delegate Task<WebSocketHandler?> WebSocketHandlerSelector(string path);

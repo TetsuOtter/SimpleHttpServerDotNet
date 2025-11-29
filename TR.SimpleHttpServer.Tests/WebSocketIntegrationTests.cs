@@ -21,7 +21,7 @@ public class WebSocketIntegrationTests : IDisposable
 		_messageReceived = new TaskCompletionSource<string>();
 		_clientConnected = new TaskCompletionSource<bool>();
 		_port = GetAvailablePort();
-		_server = new HttpServer(_port, HttpHandler, WebSocketHandlerAsync);
+		_server = new HttpServer(_port, HttpHandler, WebSocketHandlerSelectorAsync);
 		_server.Start();
 	}
 
@@ -33,6 +33,16 @@ public class WebSocketIntegrationTests : IDisposable
 	private static Task<HttpResponse> HttpHandler(HttpRequest request)
 	{
 		return Task.FromResult(new HttpResponse("200 OK", "text/plain", new NameValueCollection(), "Hello"));
+	}
+
+	private async Task<WebSocketHandler?> WebSocketHandlerSelectorAsync(string path)
+	{
+		// Only handle /ws path
+		if (path == "/ws")
+		{
+			return WebSocketHandlerAsync;
+		}
+		return null;
 	}
 
 	private async Task WebSocketHandlerAsync(HttpRequest request, WebSocketConnection connection)
@@ -81,12 +91,12 @@ public class WebSocketIntegrationTests : IDisposable
 
 		string webSocketKey = Convert.ToBase64String(Guid.NewGuid().ToByteArray());
 		string request = $"GET /ws HTTP/1.1\r\n" +
-		                 $"Host: 127.0.0.1:{_port}\r\n" +
-		                 $"Upgrade: websocket\r\n" +
-		                 $"Connection: Upgrade\r\n" +
-		                 $"Sec-WebSocket-Key: {webSocketKey}\r\n" +
-		                 $"Sec-WebSocket-Version: 13\r\n" +
-		                 $"\r\n";
+										 $"Host: 127.0.0.1:{_port}\r\n" +
+										 $"Upgrade: websocket\r\n" +
+										 $"Connection: Upgrade\r\n" +
+										 $"Sec-WebSocket-Key: {webSocketKey}\r\n" +
+										 $"Sec-WebSocket-Version: 13\r\n" +
+										 $"\r\n";
 
 		// Act
 		byte[] requestBytes = Encoding.UTF8.GetBytes(request);
@@ -192,22 +202,29 @@ public class WebSocketIntegrationTests : IDisposable
 		var pongReceived = new TaskCompletionSource<bool>();
 		ushort port = GetAvailablePort();
 
-		using HttpServer server = new HttpServer(port, HttpHandler, async (req, conn) =>
+		using HttpServer server = new HttpServer(port, HttpHandler, async (path) =>
 		{
-			while (conn.IsOpen)
+			if (path == "/ws")
 			{
-				try
+				return async (req, conn) =>
 				{
-					var msg = await conn.ReceiveMessageAsync(CancellationToken.None);
-					if (msg.Type == WebSocketMessageType.Close)
-						break;
-					// The pong is automatically sent by ReceiveMessageAsync
-				}
-				catch
-				{
-					break;
-				}
+					while (conn.IsOpen)
+					{
+						try
+						{
+							var msg = await conn.ReceiveMessageAsync(CancellationToken.None);
+							if (msg.Type == WebSocketMessageType.Close)
+								break;
+							// The pong is automatically sent by ReceiveMessageAsync
+						}
+						catch
+						{
+							break;
+						}
+					}
+				};
 			}
+			return null;
 		});
 		server.Start();
 
@@ -260,8 +277,8 @@ public class WebSocketIntegrationTests : IDisposable
 		stream.WriteTimeout = 5000;
 
 		string request = $"GET /hello HTTP/1.1\r\n" +
-		                 $"Host: 127.0.0.1:{_port}\r\n" +
-		                 $"\r\n";
+										 $"Host: 127.0.0.1:{_port}\r\n" +
+										 $"\r\n";
 
 		// Act
 		byte[] requestBytes = Encoding.UTF8.GetBytes(request);
@@ -282,12 +299,12 @@ public class WebSocketIntegrationTests : IDisposable
 	{
 		string webSocketKey = Convert.ToBase64String(Guid.NewGuid().ToByteArray());
 		string request = $"GET /ws HTTP/1.1\r\n" +
-		                 $"Host: 127.0.0.1:{_port}\r\n" +
-		                 $"Upgrade: websocket\r\n" +
-		                 $"Connection: Upgrade\r\n" +
-		                 $"Sec-WebSocket-Key: {webSocketKey}\r\n" +
-		                 $"Sec-WebSocket-Version: 13\r\n" +
-		                 $"\r\n";
+										 $"Host: 127.0.0.1:{_port}\r\n" +
+										 $"Upgrade: websocket\r\n" +
+										 $"Connection: Upgrade\r\n" +
+										 $"Sec-WebSocket-Key: {webSocketKey}\r\n" +
+										 $"Sec-WebSocket-Version: 13\r\n" +
+										 $"\r\n";
 
 		byte[] requestBytes = Encoding.UTF8.GetBytes(request);
 		await stream.WriteAsync(requestBytes, 0, requestBytes.Length);
@@ -299,7 +316,8 @@ public class WebSocketIntegrationTests : IDisposable
 		while (true)
 		{
 			int read = await stream.ReadAsync(tempBuffer, 0, 1);
-			if (read == 0) break;
+			if (read == 0)
+				break;
 			responseBuilder.Append((char)tempBuffer[0]);
 			string currentResponse = responseBuilder.ToString();
 			if (currentResponse.EndsWith("\r\n\r\n"))

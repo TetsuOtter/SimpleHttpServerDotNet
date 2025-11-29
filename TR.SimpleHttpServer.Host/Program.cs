@@ -38,7 +38,7 @@ class Program : IDisposable
 
 	public Program()
 	{
-		server = new HttpServer(8080, HandleRequest, HandleWebSocket);
+		server = new HttpServer(8080, HandleRequest, HandleWebSocketPath);
 	}
 
 	public void Start() => server.Start();
@@ -47,6 +47,16 @@ class Program : IDisposable
 	{
 		HttpResponse response = new("200 OK", "text/plain", [], $"Hello, World!\nThank you for requesting {request.Path} with method {request.Method}!");
 		return Task.FromResult(response);
+	}
+
+	static async Task<WebSocketHandler?> HandleWebSocketPath(string path)
+	{
+		// Only handle /ws path
+		if (path == "/ws")
+		{
+			return HandleWebSocket;
+		}
+		return null;
 	}
 
 	static async Task HandleWebSocket(HttpRequest request, WebSocketConnection connection)
