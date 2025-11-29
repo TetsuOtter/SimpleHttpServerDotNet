@@ -97,7 +97,7 @@ public class WebSocketConnection(
 					? WebSocketMessageType.Text
 					: WebSocketMessageType.Binary;
 
-				return new WebSocketMessage(type, messageData.ToArray());
+				return new WebSocketMessage(type, [.. messageData]);
 			}
 		}
 	}
