@@ -1,6 +1,6 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.Specialized;
-using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -273,13 +273,16 @@ internal class ProcessOneConnectionWorker
 			$"Connection: close"
 		];
 
-		string headerStr = string.Join(
-			crlfStr,
-			commonHeaders
-				.Concat(response.AdditionalHeaders.AllKeys
-					.Select(key => $"{key}: {response.AdditionalHeaders[key]}"))
-				.Concat([""])
-		);
+		List<string> allHeaders = new(commonHeaders.Length + response.AdditionalHeaders.Count + 1);
+		allHeaders.AddRange(commonHeaders);
+
+		foreach (string key in response.AdditionalHeaders.AllKeys)
+		{
+			allHeaders.Add($"{key}: {response.AdditionalHeaders[key]}");
+		}
+		allHeaders.Add("");
+
+		string headerStr = string.Join(crlfStr, allHeaders);
 
 		return WriteResponseAsync(Encoding.UTF8.GetBytes(headerStr), response.Body, isHead);
 	}
