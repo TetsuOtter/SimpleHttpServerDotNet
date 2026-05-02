@@ -17,7 +17,8 @@ internal class ProcessOneConnectionWorker
 	TcpClient client,
 	CancellationToken cancellationToken,
 	HttpConnectionHandler handler,
-	WebSocketHandlerSelector? webSocketHandlerSelector
+	WebSocketHandlerSelector? webSocketHandlerSelector,
+	WebSocketOptions? webSocketOptions = null
 ) : IDisposable
 {
 	private readonly TcpClient client = client;
@@ -25,6 +26,7 @@ internal class ProcessOneConnectionWorker
 	private readonly CancellationToken cancellationToken = cancellationToken;
 	private readonly HttpConnectionHandler handler = handler;
 	private readonly WebSocketHandlerSelector? webSocketHandlerSelector = webSocketHandlerSelector;
+	private readonly WebSocketOptions webSocketOptions = webSocketOptions ?? new WebSocketOptions();
 
 	/// <summary>
 	/// Socket linger timeout in seconds for graceful connection closure
@@ -142,17 +144,28 @@ internal class ProcessOneConnectionWorker
 		HttpRequest request = new(method, path, headers, queryString, body);
 
 		// Check for WebSocket upgrade request
-		if (webSocketHandlerSelector is not null && WebSocketHandshake.IsWebSocketUpgradeRequest(request))
+		if (webSocketHandlerSelector is not null)
 		{
-			try
+			if (WebSocketHandshake.IsWebSocketUpgradeRequest(request))
 			{
-				await HandleWebSocketUpgradeAsync(request, webSocketHandlerSelector);
+				try
+				{
+					await HandleWebSocketUpgradeAsync(request, webSocketHandlerSelector);
+				}
+				catch (Exception ex)
+				{
+					await WriteResponseAsync(HttpStatusCode.InternalServerError, "text/plain", ex.ToString());
+				}
+				return;
 			}
-			catch (Exception ex)
+
+			// RFC 6455 §4.4: client requested websocket but with an unsupported version.
+			// Respond with 400 and Sec-WebSocket-Version: 13 so the client can retry.
+			if (WebSocketHandshake.IsWebSocketVersionMismatch(request))
 			{
-				await WriteResponseAsync(HttpStatusCode.InternalServerError, "text/plain", ex.ToString());
+				await WriteWebSocketVersionMismatchResponseAsync();
+				return;
 			}
-			return;
 		}
 
 		try
@@ -185,15 +198,18 @@ internal class ProcessOneConnectionWorker
 			return;
 		}
 
+		// Negotiate subprotocol (if any are configured)
+		string? selectedSubProtocol = WebSocketHandshake.SelectSubProtocol(request, webSocketOptions.SupportedSubProtocols);
+
 		// Send the upgrade response
-		await WriteWebSocketUpgradeResponseAsync(secWebSocketKey);
+		await WriteWebSocketUpgradeResponseAsync(secWebSocketKey, selectedSubProtocol);
 
 		// Remove timeouts for WebSocket connections (they can be long-lived)
 		stream.ReadTimeout = Timeout.Infinite;
 		stream.WriteTimeout = Timeout.Infinite;
 
 		// Create WebSocket connection and invoke handler
-		using (WebSocketConnection connection = new(stream))
+		using (WebSocketConnection connection = new(stream, webSocketOptions, selectedSubProtocol))
 		{
 			try
 			{
@@ -202,6 +218,10 @@ internal class ProcessOneConnectionWorker
 			catch (System.IO.EndOfStreamException)
 			{
 				// Client disconnected, this is expected
+			}
+			catch (WebSocketProtocolException)
+			{
+				// Already closed by the connection; nothing more to do.
 			}
 		}
 
@@ -219,19 +239,43 @@ internal class ProcessOneConnectionWorker
 		}
 	}
 
-	private async Task WriteWebSocketUpgradeResponseAsync(string secWebSocketKey)
+	private async Task WriteWebSocketVersionMismatchResponseAsync()
 	{
-		NameValueCollection headers = WebSocketHandshake.CreateUpgradeResponseHeaders(secWebSocketKey);
+		const string body = "Unsupported Sec-WebSocket-Version. Only version 13 is supported.";
+		byte[] content = Encoding.UTF8.GetBytes(body);
 
-		string headerStr = string.Join(crlfStr, new[] {
+		string headerStr = string.Join(crlfStr, [
+			$"HTTP/1.1 400 Bad Request",
+			$"Server: {typeof(HttpServer).FullName}",
+			$"Date: {DateTime.UtcNow:R}",
+			$"Sec-WebSocket-Version: 13",
+			$"Content-Type: text/plain; charset=UTF-8",
+			$"Content-Length: {content.Length}",
+			$"Connection: close",
+			""
+		]);
+
+		await WriteResponseAsync(Encoding.UTF8.GetBytes(headerStr), content, isHead: false);
+	}
+
+	private async Task WriteWebSocketUpgradeResponseAsync(string secWebSocketKey, string? selectedSubProtocol)
+	{
+		NameValueCollection headers = WebSocketHandshake.CreateUpgradeResponseHeaders(secWebSocketKey, selectedSubProtocol);
+
+		List<string> lines = new(7)
+		{
 			"HTTP/1.1 101 Switching Protocols",
 			$"Server: {typeof(HttpServer).FullName}",
 			$"Date: {DateTime.UtcNow:R}",
 			$"Upgrade: {headers["Upgrade"]}",
 			$"Connection: {headers["Connection"]}",
 			$"Sec-WebSocket-Accept: {headers["Sec-WebSocket-Accept"]}",
-			""
-		});
+		};
+		if (!string.IsNullOrEmpty(selectedSubProtocol))
+			lines.Add($"Sec-WebSocket-Protocol: {selectedSubProtocol}");
+		lines.Add("");
+
+		string headerStr = string.Join(crlfStr, lines);
 
 		byte[] responseBytes = Encoding.UTF8.GetBytes(headerStr);
 		await stream.WriteAsync(responseBytes, 0, responseBytes.Length, cancellationToken);

@@ -10,11 +10,22 @@ namespace TR.SimpleHttpServer.WebSocket;
 /// Reads WebSocket frames from a stream
 /// </summary>
 [EditorBrowsable(EditorBrowsableState.Never)]
-public class WebSocketFrameReader(
-	Stream stream
-)
+public class WebSocketFrameReader
 {
-	private readonly Stream _stream = stream ?? throw new ArgumentNullException(nameof(stream));
+	private readonly Stream _stream;
+	private readonly long _maxFrameSize;
+
+	public WebSocketFrameReader(Stream stream)
+		: this(stream, WebSocketOptions.DefaultMaxFrameSize)
+	{
+	}
+
+	public WebSocketFrameReader(Stream stream, long maxFrameSize)
+	{
+		_stream = stream ?? throw new ArgumentNullException(nameof(stream));
+		if (maxFrameSize < 0) throw new ArgumentOutOfRangeException(nameof(maxFrameSize));
+		_maxFrameSize = maxFrameSize;
+	}
 
 	/// <summary>
 	/// Reads a WebSocket frame from the stream
@@ -26,6 +37,9 @@ public class WebSocketFrameReader(
 		await ReadExactAsync(header, 0, 2, cancellationToken).ConfigureAwait(false);
 
 		bool isFinal = (header[0] & 0x80) != 0;
+		bool rsv1 = (header[0] & 0x40) != 0;
+		bool rsv2 = (header[0] & 0x20) != 0;
+		bool rsv3 = (header[0] & 0x10) != 0;
 		WebSocketOpcode opcode = (WebSocketOpcode)(header[0] & 0x0F);
 		bool isMasked = (header[1] & 0x80) != 0;
 		long payloadLength = header[1] & 0x7F;
@@ -46,7 +60,15 @@ public class WebSocketFrameReader(
 			{
 				payloadLength = (payloadLength << 8) | extLen[i];
 			}
+
+			// RFC 6455: most-significant bit of 64-bit length MUST be 0
+			if (payloadLength < 0)
+				throw new WebSocketFrameSizeException("Frame payload length has the high bit set (RFC 6455 violation)");
 		}
+
+		// Enforce configured limit before allocating
+		if (payloadLength > _maxFrameSize || payloadLength > int.MaxValue)
+			throw new WebSocketFrameSizeException($"Frame payload length {payloadLength} exceeds maximum allowed size {_maxFrameSize}");
 
 		// Read masking key if masked
 		byte[] maskingKey = Array.Empty<byte>();
@@ -69,7 +91,7 @@ public class WebSocketFrameReader(
 			}
 		}
 
-		return new WebSocketFrame(isFinal, opcode, isMasked, maskingKey, payload);
+		return new WebSocketFrame(isFinal, rsv1, rsv2, rsv3, opcode, isMasked, maskingKey, payload);
 	}
 
 	private async Task ReadExactAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
@@ -85,4 +107,13 @@ public class WebSocketFrameReader(
 			totalRead += bytesRead;
 		}
 	}
+}
+
+/// <summary>
+/// Thrown when a frame's declared payload length exceeds the configured maximum.
+/// </summary>
+[EditorBrowsable(EditorBrowsableState.Never)]
+public class WebSocketFrameSizeException : Exception
+{
+	public WebSocketFrameSizeException(string message) : base(message) { }
 }

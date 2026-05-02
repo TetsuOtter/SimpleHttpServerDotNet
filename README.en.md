@@ -8,8 +8,11 @@ A simple and lightweight HTTP server library for .NET. Built on .NET Standard 2.
 
 - ✅ **Simple API**: Easy to build HTTP servers
 - ✅ **Async/Await**: Task-based asynchronous API for high-efficiency processing
-- ✅ **WebSocket Support**: Native WebSocket communication support
-- ✅ **Multi-Framework Support**: Supports netstandard2.0, netstandard2.1, net8.0, and net10.0
+- ✅ **WebSocket Support**: RFC 6455-compliant native WebSocket communication
+- ✅ **Protocol Validation**: Strict RFC 6455 validation of RSV bits, opcodes, masking, frame sizes, UTF-8 text payloads, and close codes
+- ✅ **Ping/Pong**: Automatic pong replies to incoming pings with event notifications
+- ✅ **Subprotocol Negotiation**: `Sec-WebSocket-Protocol` header negotiation
+- ✅ **.NET Standard 2.0**: Compatible with netstandard2.1, net8.0, net10.0, and more
 - ✅ **MIT License**: Free to use and modify
 
 ## Project Structure
@@ -24,7 +27,9 @@ The main library providing HTTP server functionality and WebSocket support.
 - `HttpRequest`: Represents an HTTP request
 - `HttpResponse`: Represents an HTTP response
 - `WebSocketConnection`: Manages WebSocket connections
+- `WebSocketOptions`: Configuration options for WebSocket behavior
 - `WebSocketHandler`: Delegate for WebSocket processing
+- `WebSocketProtocolException`: Exception thrown on WebSocket protocol violations
 
 ### TR.SimpleHttpServer.Host
 
@@ -91,9 +96,7 @@ using TR.SimpleHttpServer.WebSocket;
 async Task<WebSocketHandler?> HandleWebSocketPath(string path)
 {
 	if (path == "/ws")
-	{
 		return HandleWebSocketConnection;
-	}
 	return null;
 }
 
@@ -105,14 +108,10 @@ async Task HandleWebSocketConnection(HttpRequest request, WebSocketConnection co
 		var message = await connection.ReceiveMessageAsync(CancellationToken.None);
 
 		if (message.Type == WebSocketMessageType.Close)
-		{
-			await connection.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None);
-			break;
-		}
+			break; // Close frame already sent automatically (AutoRespondToClose = true by default)
 
 		if (message.Type == WebSocketMessageType.Text)
 		{
-			// Echo text message back
 			string text = message.GetText();
 			await connection.SendTextAsync($"Echo: {text}", CancellationToken.None);
 		}
@@ -124,6 +123,23 @@ using var server = new HttpServer(8080, HandleRequest, HandleWebSocketPath);
 server.Start();
 ```
 
+### Server with WebSocket Options
+
+```csharp
+using TR.SimpleHttpServer.WebSocket;
+
+WebSocketOptions options = new()
+{
+	SupportedSubProtocols = new[] { "chat", "superchat" },
+	MaxFrameSize = 4 * 1024 * 1024,    // 4 MB
+	MaxMessageSize = 16 * 1024 * 1024, // 16 MB
+	ValidateUtf8 = true,
+};
+
+using var server = new HttpServer(8080, HandleRequest, HandleWebSocketPath, options);
+server.Start();
+```
+
 ## API Reference
 
 ### HttpServer
@@ -132,7 +148,8 @@ server.Start();
 // Initialize HTTP server
 public HttpServer(ushort port, HttpConnectionHandler handler);
 public HttpServer(ushort port, HttpConnectionHandler handler, WebSocketHandlerSelector webSocketHandlerSelector);
-public HttpServer(IPAddress localAddress, ushort port, HttpConnectionHandler handler, WebSocketHandlerSelector? webSocketHandlerSelector = null);
+public HttpServer(ushort port, HttpConnectionHandler handler, WebSocketHandlerSelector webSocketHandlerSelector, WebSocketOptions webSocketOptions);
+public HttpServer(IPAddress localAddress, ushort port, HttpConnectionHandler handler, WebSocketHandlerSelector? webSocketHandlerSelector = null, WebSocketOptions? webSocketOptions = null);
 
 // Start server
 public void Start();
@@ -172,11 +189,14 @@ public class HttpRequest
 ### HttpResponse
 
 ```csharp
-// Create response with status code and string body
+// Create response with HttpStatusCode and string body
 public HttpResponse(HttpStatusCode status, string contentType, NameValueCollection additionalHeaders, string body);
 
-// Create response with status code and binary body
-public HttpResponse(HttpStatusCode status, string contentType, NameValueCollection additionalHeaders, byte[] body);
+// Create response with status string and string body (e.g. "404 Not Found")
+public HttpResponse(string status, string contentType, NameValueCollection additionalHeaders, string body);
+
+// Create response with status string and binary body
+public HttpResponse(string status, string contentType, NameValueCollection additionalHeaders, byte[] body);
 
 public string Status { get; }
 public string ContentType { get; }
@@ -184,23 +204,103 @@ public byte[] Body { get; }
 public NameValueCollection AdditionalHeaders { get; }
 ```
 
+### WebSocketOptions
+
+```csharp
+public class WebSocketOptions
+{
+	// Maximum payload size for a single frame in bytes (default: 16 MB)
+	// Exceeding this closes the connection with 1009 (Message Too Big)
+	public int MaxFrameSize { get; set; }
+
+	// Maximum total payload size for a fragmented message in bytes (default: 64 MB)
+	public int MaxMessageSize { get; set; }
+
+	// Whether client frames must be masked (default: true)
+	// RFC 6455 §5.1. Set to false for testing purposes only.
+	public bool RequireMasking { get; set; }
+
+	// Whether to automatically reply to a received Close frame (default: true)
+	public bool AutoRespondToClose { get; set; }
+
+	// Whether to validate UTF-8 in Text messages (default: true)
+	// Invalid UTF-8 closes the connection with 1007 (Invalid Payload Data)
+	public bool ValidateUtf8 { get; set; }
+
+	// Subprotocols this server supports, in priority order.
+	// null or empty means no subprotocol negotiation is performed.
+	public IReadOnlyList<string>? SupportedSubProtocols { get; set; }
+}
+```
+
 ### WebSocketConnection
 
 ```csharp
-// Receive WebSocket message
-public Task<WebSocketMessage> ReceiveMessageAsync(CancellationToken cancellationToken);
-
-// Send text message
-public Task SendTextAsync(string text, CancellationToken cancellationToken);
-
-// Send binary message
-public Task SendBinaryAsync(byte[] data, CancellationToken cancellationToken);
-
-// Close WebSocket connection
-public Task CloseAsync(WebSocketCloseStatus status, string statusDescription, CancellationToken cancellationToken);
+// Constructors
+public WebSocketConnection(Stream stream);
+public WebSocketConnection(Stream stream, WebSocketOptions options, string? selectedSubProtocol = null);
 
 // Check if connection is open
 public bool IsOpen { get; }
+
+// Subprotocol negotiated during handshake, or null if none
+public string? SelectedSubProtocol { get; }
+
+// Fired when a ping frame is received (after the automatic pong reply)
+public event EventHandler<PingPongEventArgs>? PingReceived;
+
+// Fired when a pong frame is received
+public event EventHandler<PingPongEventArgs>? PongReceived;
+
+// Receive a WebSocket message
+// Throws WebSocketProtocolException on protocol violations (connection is already closed before throw)
+public Task<WebSocketMessage> ReceiveMessageAsync(CancellationToken cancellationToken);
+
+// Send a text message
+public Task SendTextAsync(string text, CancellationToken cancellationToken);
+
+// Send a binary message
+public Task SendBinaryAsync(byte[] data, CancellationToken cancellationToken);
+
+// Send a ping frame (payload must not exceed 125 bytes)
+public Task SendPingAsync(byte[] data, CancellationToken cancellationToken);
+
+// Send a close frame and close the connection
+public Task CloseAsync(WebSocketCloseStatus status, string reason, CancellationToken cancellationToken);
+```
+
+### WebSocketMessage
+
+```csharp
+public class WebSocketMessage
+{
+	// Message type (Text / Binary / Close)
+	public WebSocketMessageType Type { get; }
+
+	// Raw message payload
+	public byte[] Data { get; }
+
+	// Close status code (null for non-Close messages)
+	public WebSocketCloseStatus? CloseStatus { get; }
+
+	// Close reason string (empty for non-Close messages)
+	public string CloseReason { get; }
+
+	// Get message data as a UTF-8 string
+	public string GetText();
+}
+```
+
+### WebSocketProtocolException
+
+Thrown when an RFC 6455 protocol violation is detected. The connection is closed with the appropriate status code before this exception is raised.
+
+```csharp
+public class WebSocketProtocolException : Exception
+{
+	// The close status code sent to the peer
+	public WebSocketCloseStatus CloseStatus { get; }
+}
 ```
 
 ## Host Application
@@ -217,29 +317,17 @@ dotnet run --project TR.SimpleHttpServer.Host
 
 ## Testing
 
-### Running Unit Tests
-
 ```bash
 dotnet test TR.SimpleHttpServer.Tests
 ```
 
-### Running E2E Tests
-
-WebSocket integration tests:
-
-```bash
-# Start the server
-dotnet run --project TR.SimpleHttpServer.Host &
-
-# Run tests
-cd e2e-tests
-pip install -r requirements.txt
-pytest -v
-```
-
 ## Supported Frameworks
 
-- .NET Standard 2.0
+The library targets **netstandard2.0** and is compatible with:
+
+- .NET Standard 2.0 / 2.1
+- .NET 5 and later (net8.0, net10.0, etc.)
+- .NET Framework 4.6.1 and later
 
 ## License
 

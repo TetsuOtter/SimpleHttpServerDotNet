@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Security.Cryptography;
@@ -53,6 +54,23 @@ public static class WebSocketHandshake
 	}
 
 	/// <summary>
+	/// Returns true if the request looks like a WebSocket upgrade attempt with the wrong
+	/// <c>Sec-WebSocket-Version</c> (RFC 6455 §4.4 requires the server to respond with 400 plus
+	/// a <c>Sec-WebSocket-Version: 13</c> header so the client can retry).
+	/// </summary>
+	public static bool IsWebSocketVersionMismatch(HttpRequest request)
+	{
+		if (request is null) return false;
+		if (request.Method != "GET") return false;
+		string upgrade = request.Headers["Upgrade"] ?? "";
+		if (!string.Equals(upgrade.Trim(), "websocket", StringComparison.OrdinalIgnoreCase)) return false;
+		string connection = request.Headers["Connection"] ?? "";
+		if (!ContainsIgnoreCase(connection, "upgrade")) return false;
+		string version = request.Headers["Sec-WebSocket-Version"] ?? "";
+		return !string.IsNullOrEmpty(version) && version != "13";
+	}
+
+	/// <summary>
 	/// Creates the Sec-WebSocket-Accept value for the handshake response
 	/// </summary>
 	public static string ComputeAcceptKey(string secWebSocketKey)
@@ -70,6 +88,13 @@ public static class WebSocketHandshake
 	/// Creates the response headers for a successful WebSocket upgrade
 	/// </summary>
 	public static NameValueCollection CreateUpgradeResponseHeaders(string secWebSocketKey)
+		=> CreateUpgradeResponseHeaders(secWebSocketKey, null);
+
+	/// <summary>
+	/// Creates the response headers for a successful WebSocket upgrade, optionally including
+	/// a negotiated subprotocol.
+	/// </summary>
+	public static NameValueCollection CreateUpgradeResponseHeaders(string secWebSocketKey, string? selectedSubProtocol)
 	{
 		NameValueCollection headers = new()
 		{
@@ -77,6 +102,9 @@ public static class WebSocketHandshake
 			{ "Connection", "Upgrade" },
 			{ "Sec-WebSocket-Accept", ComputeAcceptKey(secWebSocketKey) }
 		};
+
+		if (!string.IsNullOrEmpty(selectedSubProtocol))
+			headers.Add("Sec-WebSocket-Protocol", selectedSubProtocol);
 
 		return headers;
 	}
@@ -87,6 +115,47 @@ public static class WebSocketHandshake
 	public static string GetSecWebSocketKey(HttpRequest request)
 	{
 		return request?.Headers["Sec-WebSocket-Key"] ?? "";
+	}
+
+	/// <summary>
+	/// Returns the list of subprotocols requested by the client (in order), or empty if none.
+	/// </summary>
+	public static IReadOnlyList<string> GetRequestedSubProtocols(HttpRequest request)
+	{
+		string? raw = request?.Headers["Sec-WebSocket-Protocol"];
+		if (string.IsNullOrEmpty(raw))
+			return Array.Empty<string>();
+
+		string[] parts = raw!.Split(',');
+		List<string> result = new(parts.Length);
+		foreach (string part in parts)
+		{
+			string trimmed = part.Trim();
+			if (trimmed.Length > 0)
+				result.Add(trimmed);
+		}
+		return result;
+	}
+
+	/// <summary>
+	/// Selects the first client-requested subprotocol that is also in <paramref name="supportedSubProtocols"/>,
+	/// preserving the client's preference order. Returns null if there is no overlap.
+	/// </summary>
+	public static string? SelectSubProtocol(HttpRequest request, IReadOnlyList<string>? supportedSubProtocols)
+	{
+		if (supportedSubProtocols is null || supportedSubProtocols.Count == 0)
+			return null;
+
+		IReadOnlyList<string> requested = GetRequestedSubProtocols(request);
+		foreach (string r in requested)
+		{
+			foreach (string s in supportedSubProtocols)
+			{
+				if (string.Equals(r, s, StringComparison.Ordinal))
+					return s;
+			}
+		}
+		return null;
 	}
 
 	private static bool ContainsIgnoreCase(string source, string value)

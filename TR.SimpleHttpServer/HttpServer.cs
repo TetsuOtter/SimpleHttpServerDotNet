@@ -10,23 +10,30 @@ namespace TR.SimpleHttpServer;
 
 public delegate Task<HttpResponse> HttpConnectionHandler(HttpRequest request);
 
-public class HttpServer(
-	IPAddress localAddress,
-	ushort port,
-	HttpConnectionHandler handler,
-	WebSocketHandlerSelector? webSocketHandlerSelector = null
-) : IDisposable
+public class HttpServer : IDisposable
 {
 	public bool IsRunning => Listener.Server.IsBound;
-	public ushort Port { get; } = port;
-	private TcpListener Listener { get; } = new TcpListener(localAddress, port);
-	private HttpConnectionHandler Handler { get; } = handler;
-	private WebSocketHandlerSelector? WebSocketHandlerSelector { get; } = webSocketHandlerSelector;
+	public ushort Port { get; }
+	private TcpListener Listener { get; }
+	private HttpConnectionHandler Handler { get; }
+	private WebSocketHandlerSelector? WebSocketHandlerSelector { get; }
+	private WebSocketOptions? WebSocketOptions { get; }
 	private CancellationTokenSource? CancellationTokenSource = null;
 
-	public HttpServer(ushort port, HttpConnectionHandler handler) : this(IPAddress.Any, port, handler, null) { }
+	public HttpServer(IPAddress localAddress, ushort port, HttpConnectionHandler handler, WebSocketHandlerSelector? webSocketHandlerSelector = null, WebSocketOptions? webSocketOptions = null)
+	{
+		Listener = new TcpListener(localAddress, port);
+		Port = port;
+		Handler = handler;
+		WebSocketHandlerSelector = webSocketHandlerSelector;
+		WebSocketOptions = webSocketOptions;
+	}
 
-	public HttpServer(ushort port, HttpConnectionHandler handler, WebSocketHandlerSelector webSocketHandlerSelector) : this(IPAddress.Any, port, handler, webSocketHandlerSelector) { }
+	public HttpServer(ushort port, HttpConnectionHandler handler) : this(IPAddress.Any, port, handler, null, null) { }
+
+	public HttpServer(ushort port, HttpConnectionHandler handler, WebSocketHandlerSelector webSocketHandlerSelector) : this(IPAddress.Any, port, handler, webSocketHandlerSelector, null) { }
+
+	public HttpServer(ushort port, HttpConnectionHandler handler, WebSocketHandlerSelector webSocketHandlerSelector, WebSocketOptions webSocketOptions) : this(IPAddress.Any, port, handler, webSocketHandlerSelector, webSocketOptions) { }
 
 	public void Start()
 	{
@@ -95,7 +102,7 @@ public class HttpServer(
 			_ = Task
 				.Run(async () =>
 				{
-					using ProcessOneConnectionWorker worker = new(client, cancellationToken, Handler, WebSocketHandlerSelector);
+					using ProcessOneConnectionWorker worker = new(client, cancellationToken, Handler, WebSocketHandlerSelector, WebSocketOptions);
 					await worker.ProcessAsync().ConfigureAwait(false);
 				}, cancellationToken)
 				.ContinueWith((task) =>

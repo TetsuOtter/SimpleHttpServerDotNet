@@ -16,7 +16,9 @@ public class WebSocketConnectionTests : IDisposable
 	public WebSocketConnectionTests()
 	{
 		_stream = new MemoryStream();
-		_connection = new WebSocketConnection(_stream);
+		// Existing tests write raw unmasked frames directly to a MemoryStream rather than
+		// going through the HTTP handshake, so we relax the masking requirement here.
+		_connection = new WebSocketConnection(_stream, new WebSocketOptions { RequireMasking = false });
 	}
 
 	public void Dispose()
@@ -169,16 +171,17 @@ public class WebSocketConnectionTests : IDisposable
 	}
 
 	[Fact]
-	public async Task ReceiveMessageAsync_ContinuationWithoutInitialFrame_ThrowsInvalidOperationException()
+	public async Task ReceiveMessageAsync_ContinuationWithoutInitialFrame_ThrowsProtocolException()
 	{
 		// Arrange - Continuation frame without preceding data frame
 		byte[] continuationFrame = new byte[] { 0x80, 0x03, 0x41, 0x42, 0x43 }; // FIN=1, Continuation, "ABC"
 		_stream.Write(continuationFrame, 0, continuationFrame.Length);
 		_stream.Position = 0;
 
-		// Act & Assert
-		await Assert.ThrowsAsync<InvalidOperationException>(() =>
+		// Act & Assert - RFC 6455 5.4: protocol error closes with 1002
+		var ex = await Assert.ThrowsAsync<WebSocketProtocolException>(() =>
 			_connection.ReceiveMessageAsync(CancellationToken.None));
+		Assert.Equal(WebSocketCloseStatus.ProtocolError, ex.CloseStatus);
 	}
 
 	#endregion

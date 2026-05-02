@@ -8,14 +8,15 @@ using System.Threading.Tasks;
 namespace TR.SimpleHttpServer.WebSocket;
 
 /// <summary>
-/// Represents an active WebSocket connection
+/// Represents an active WebSocket connection (RFC 6455)
 /// </summary>
-public class WebSocketConnection(
-	Stream stream
-) : IDisposable
+public class WebSocketConnection : IDisposable
 {
-	private readonly Stream _stream = stream ?? throw new ArgumentNullException(nameof(stream));
-	private readonly WebSocketFrameReader _frameReader = new(stream);
+	private static readonly Encoding StrictUtf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+
+	private readonly Stream _stream;
+	private readonly WebSocketOptions _options;
+	private readonly WebSocketFrameReader _frameReader;
 	private readonly SemaphoreSlim _sendLock = new(1, 1);
 	private bool _isOpen = true;
 	private bool _closeSent = false;
@@ -27,6 +28,11 @@ public class WebSocketConnection(
 	public bool IsOpen => _isOpen && !_disposedValue;
 
 	/// <summary>
+	/// The subprotocol that was negotiated during the WebSocket handshake, if any.
+	/// </summary>
+	public string? SelectedSubProtocol { get; }
+
+	/// <summary>
 	/// Occurs when a ping frame is received
 	/// </summary>
 	public event EventHandler<PingPongEventArgs>? PingReceived;
@@ -36,9 +42,23 @@ public class WebSocketConnection(
 	/// </summary>
 	public event EventHandler<PingPongEventArgs>? PongReceived;
 
+	public WebSocketConnection(Stream stream)
+		: this(stream, new WebSocketOptions(), null)
+	{
+	}
+
+	public WebSocketConnection(Stream stream, WebSocketOptions options, string? selectedSubProtocol = null)
+	{
+		_stream = stream ?? throw new ArgumentNullException(nameof(stream));
+		_options = options ?? throw new ArgumentNullException(nameof(options));
+		_frameReader = new WebSocketFrameReader(stream, options.MaxFrameSize);
+		SelectedSubProtocol = selectedSubProtocol;
+	}
+
 	/// <summary>
-	/// Receives a message from the WebSocket connection
+	/// Receives a message from the WebSocket connection.
 	/// </summary>
+	/// <exception cref="WebSocketProtocolException">Thrown if the peer violates the WebSocket protocol; the connection is closed before the throw.</exception>
 	public async Task<WebSocketMessage> ReceiveMessageAsync(CancellationToken cancellationToken)
 	{
 		ThrowIfDisposed();
@@ -51,122 +71,170 @@ public class WebSocketConnection(
 
 		while (true)
 		{
-			WebSocketFrame frame = await _frameReader.ReadFrameAsync(cancellationToken).ConfigureAwait(false);
-
-			var result = await ProcessFrameAsync(frame, messageType, messageData, cancellationToken).ConfigureAwait(false);
-
-			if (result.IsComplete)
+			WebSocketFrame frame;
+			try
 			{
-				return result.Message!;
+				frame = await _frameReader.ReadFrameAsync(cancellationToken).ConfigureAwait(false);
+			}
+			catch (WebSocketFrameSizeException ex)
+			{
+				await FailConnectionAsync(WebSocketCloseStatus.MessageTooBig, ex.Message, cancellationToken).ConfigureAwait(false);
+				throw new WebSocketProtocolException(WebSocketCloseStatus.MessageTooBig, ex.Message, ex);
 			}
 
-			if (result.UpdatedMessageType.HasValue)
+			// RFC 6455 5.2: RSV bits MUST be 0 unless an extension is negotiated.
+			if (frame.Rsv1 || frame.Rsv2 || frame.Rsv3)
+				await FailConnectionAsync(WebSocketCloseStatus.ProtocolError, "Reserved bits set without negotiated extension", cancellationToken).ConfigureAwait(false);
+
+			// RFC 6455 5.1: client-to-server frames MUST be masked.
+			if (_options.RequireMasking && !frame.IsMasked)
+				await FailConnectionAsync(WebSocketCloseStatus.ProtocolError, "Client frame must be masked", cancellationToken).ConfigureAwait(false);
+
+			bool isControl = ((int)frame.Opcode & 0x08) != 0;
+
+			if (isControl)
 			{
-				messageType = result.UpdatedMessageType;
+				// Reserved control opcodes 0xB-0xF
+				if (frame.Opcode != WebSocketOpcode.Close
+					&& frame.Opcode != WebSocketOpcode.Ping
+					&& frame.Opcode != WebSocketOpcode.Pong)
+				{
+					await FailConnectionAsync(WebSocketCloseStatus.ProtocolError, $"Reserved control opcode 0x{(int)frame.Opcode:X}", cancellationToken).ConfigureAwait(false);
+				}
+
+				// RFC 6455 5.4: control frames MUST NOT be fragmented.
+				if (!frame.IsFinal)
+					await FailConnectionAsync(WebSocketCloseStatus.ProtocolError, "Control frame must not be fragmented", cancellationToken).ConfigureAwait(false);
+
+				// RFC 6455 5.5: control frame payload <= 125 bytes.
+				if (frame.Payload.Length > 125)
+					await FailConnectionAsync(WebSocketCloseStatus.ProtocolError, "Control frame payload exceeds 125 bytes", cancellationToken).ConfigureAwait(false);
+
+				if (frame.Opcode == WebSocketOpcode.Close)
+				{
+					return await HandleCloseFrameAsync(frame, cancellationToken).ConfigureAwait(false);
+				}
+				if (frame.Opcode == WebSocketOpcode.Ping)
+				{
+					await HandlePingFrameAsync(frame, cancellationToken).ConfigureAwait(false);
+					continue;
+				}
+				// Pong
+				PongReceived?.Invoke(this, new PingPongEventArgs(frame.Payload));
+				continue;
 			}
+
+			// Data frame: validate opcode and continuation order
+			if (frame.Opcode != WebSocketOpcode.Continuation
+				&& frame.Opcode != WebSocketOpcode.Text
+				&& frame.Opcode != WebSocketOpcode.Binary)
+			{
+				await FailConnectionAsync(WebSocketCloseStatus.ProtocolError, $"Reserved data opcode 0x{(int)frame.Opcode:X}", cancellationToken).ConfigureAwait(false);
+			}
+
+			if (frame.Opcode == WebSocketOpcode.Continuation)
+			{
+				if (messageType is null)
+					await FailConnectionAsync(WebSocketCloseStatus.ProtocolError, "Continuation frame without initial frame", cancellationToken).ConfigureAwait(false);
+			}
+			else
+			{
+				if (messageType is not null)
+					await FailConnectionAsync(WebSocketCloseStatus.ProtocolError, "New data frame received while expecting continuation", cancellationToken).ConfigureAwait(false);
+				messageType = frame.Opcode;
+			}
+
+			// Enforce per-message size limit
+			if ((long)messageData.Count + frame.Payload.Length > _options.MaxMessageSize)
+			{
+				await FailConnectionAsync(WebSocketCloseStatus.MessageTooBig, $"Message exceeds maximum size {_options.MaxMessageSize}", cancellationToken).ConfigureAwait(false);
+			}
+
+			messageData.AddRange(frame.Payload);
+
+			if (!frame.IsFinal)
+				continue;
+
+			byte[] data = [.. messageData];
+
+			if (messageType == WebSocketOpcode.Text)
+			{
+				if (_options.ValidateUtf8 && !IsValidUtf8(data))
+					await FailConnectionAsync(WebSocketCloseStatus.InvalidPayloadData, "Text payload is not valid UTF-8", cancellationToken).ConfigureAwait(false);
+
+				return new WebSocketMessage(WebSocketMessageType.Text, data);
+			}
+
+			return new WebSocketMessage(WebSocketMessageType.Binary, data);
 		}
 	}
 
-	/// <summary>
-	/// Processes a single WebSocket frame
-	/// </summary>
-	private async Task<FrameProcessResult> ProcessFrameAsync(
-		WebSocketFrame frame,
-		WebSocketOpcode? currentMessageType,
-		List<byte> messageData,
-		CancellationToken cancellationToken
-	)
+	private async Task HandlePingFrameAsync(WebSocketFrame frame, CancellationToken cancellationToken)
 	{
-		return frame.Opcode switch
+		// Send pong synchronously so any send error is observed and ordering is explicit.
+		try
 		{
-			WebSocketOpcode.Close => ProcessCloseFrame(frame),
-			WebSocketOpcode.Ping => ProcessPingFrameAsync(frame, cancellationToken),
-			WebSocketOpcode.Pong => ProcessPongFrame(frame),
-			WebSocketOpcode.Continuation or WebSocketOpcode.Text or WebSocketOpcode.Binary
-				=> ProcessDataFrame(frame, currentMessageType, messageData),
+			await SendFrameAsync(new WebSocketFrame(true, WebSocketOpcode.Pong, frame.Payload), cancellationToken).ConfigureAwait(false);
+		}
+		catch
+		{
+			_isOpen = false;
+			throw;
+		}
 
-			_ => throw new InvalidOperationException($"Unknown opcode: {frame.Opcode}")
-		};
+		PingReceived?.Invoke(this, new PingPongEventArgs(frame.Payload));
 	}
 
-	private FrameProcessResult ProcessCloseFrame(WebSocketFrame frame)
+	private async Task<WebSocketMessage> HandleCloseFrameAsync(WebSocketFrame frame, CancellationToken cancellationToken)
 	{
-		_isOpen = false;
 		WebSocketCloseStatus? closeStatus = null;
 		string closeReason = "";
 
+		// RFC 6455 5.5.1: payload length must be 0, or >= 2 (status code) optionally followed by reason.
+		if (frame.Payload.Length == 1)
+		{
+			await FailConnectionAsync(WebSocketCloseStatus.ProtocolError, "Close frame payload length 1 is invalid", cancellationToken).ConfigureAwait(false);
+		}
+
 		if (frame.Payload.Length >= 2)
 		{
-			closeStatus = (WebSocketCloseStatus)((frame.Payload[0] << 8) | frame.Payload[1]);
+			ushort code = (ushort)((frame.Payload[0] << 8) | frame.Payload[1]);
+			if (!IsValidCloseCode(code))
+				await FailConnectionAsync(WebSocketCloseStatus.ProtocolError, $"Close frame uses disallowed status code {code}", cancellationToken).ConfigureAwait(false);
+
+			closeStatus = (WebSocketCloseStatus)code;
+
 			if (frame.Payload.Length > 2)
 			{
-				closeReason = Encoding.UTF8.GetString(frame.Payload, 2, frame.Payload.Length - 2);
+				int reasonLen = frame.Payload.Length - 2;
+				byte[] reasonBytes = new byte[reasonLen];
+				Array.Copy(frame.Payload, 2, reasonBytes, 0, reasonLen);
+				if (_options.ValidateUtf8 && !IsValidUtf8(reasonBytes))
+					await FailConnectionAsync(WebSocketCloseStatus.InvalidPayloadData, "Close reason is not valid UTF-8", cancellationToken).ConfigureAwait(false);
+				closeReason = StrictUtf8.GetString(reasonBytes);
 			}
 		}
 
-		var message = new WebSocketMessage(WebSocketMessageType.Close, Array.Empty<byte>(), closeStatus, closeReason);
-		return new FrameProcessResult { Message = message, IsComplete = true };
-	}
+		_isOpen = false;
 
-	private FrameProcessResult ProcessPingFrameAsync(WebSocketFrame frame, CancellationToken cancellationToken)
-	{
-		// Respond with Pong without awaiting - it can complete in the background
-		_ = SendPongAsync(frame.Payload, cancellationToken);
-
-		// Invoke PingReceived event
-		PingReceived?.Invoke(this, new PingPongEventArgs(frame.Payload));
-
-		return new FrameProcessResult { IsComplete = false };
-	}
-
-	private FrameProcessResult ProcessPongFrame(WebSocketFrame frame)
-	{
-		// Invoke PongReceived event
-		PongReceived?.Invoke(this, new PingPongEventArgs(frame.Payload));
-
-		// Pong received, continue waiting for data frames
-		return new FrameProcessResult { IsComplete = false };
-	}
-
-	private FrameProcessResult ProcessDataFrame(WebSocketFrame frame, WebSocketOpcode? messageType, List<byte> messageData)
-	{
-		if (frame.Opcode == WebSocketOpcode.Continuation)
+		if (_options.AutoRespondToClose && !_closeSent)
 		{
-			if (messageType is null)
-				throw new InvalidOperationException("Received continuation frame without initial frame");
-		}
-		else
-		{
-			// This is the first frame of a new message
-			messageType = frame.Opcode;
+			try
+			{
+				WebSocketCloseStatus replyStatus = closeStatus ?? WebSocketCloseStatus.NormalClosure;
+				await SendCloseFrameAsync(replyStatus, "", cancellationToken).ConfigureAwait(false);
+			}
+			catch
+			{
+				// Best effort - peer may have already closed the underlying stream.
+			}
 		}
 
-		// Accumulate payload
-		messageData.AddRange(frame.Payload);
-
-		// If this is the final frame, return the message
-		if (frame.IsFinal)
-		{
-			WebSocketMessageType type = messageType == WebSocketOpcode.Text
-				? WebSocketMessageType.Text
-				: WebSocketMessageType.Binary;
-
-			var message = new WebSocketMessage(type, [.. messageData]);
-			return new FrameProcessResult { Message = message, IsComplete = true };
-		}
-
-		return new FrameProcessResult { IsComplete = false, UpdatedMessageType = messageType };
-	}
-
-	private class FrameProcessResult
-	{
-		public WebSocketMessage? Message { get; set; }
-		public bool IsComplete { get; set; }
-		public WebSocketOpcode? UpdatedMessageType { get; set; }
+		return new WebSocketMessage(WebSocketMessageType.Close, Array.Empty<byte>(), closeStatus, closeReason);
 	}
 
 	/// <summary>
-	/// Sends a text message to the WebSocket connection
+	/// Sends a text message.
 	/// </summary>
 	public Task SendTextAsync(string message, CancellationToken cancellationToken)
 	{
@@ -176,7 +244,7 @@ public class WebSocketConnection(
 	}
 
 	/// <summary>
-	/// Sends a binary message to the WebSocket connection
+	/// Sends a binary message.
 	/// </summary>
 	public Task SendBinaryAsync(byte[] data, CancellationToken cancellationToken)
 	{
@@ -185,43 +253,38 @@ public class WebSocketConnection(
 	}
 
 	/// <summary>
-	/// Sends a ping frame
+	/// Sends a ping frame.
 	/// </summary>
 	public Task SendPingAsync(byte[] data, CancellationToken cancellationToken)
 	{
 		ThrowIfDisposed();
+		if (data.Length > 125)
+			throw new ArgumentException("Ping payload must not exceed 125 bytes", nameof(data));
 		return SendFrameAsync(new WebSocketFrame(true, WebSocketOpcode.Ping, data), cancellationToken);
 	}
 
 	/// <summary>
-	/// Sends a pong frame
-	/// </summary>
-	private Task SendPongAsync(byte[] data, CancellationToken cancellationToken)
-	{
-		ThrowIfDisposed();
-		return SendFrameAsync(new WebSocketFrame(true, WebSocketOpcode.Pong, data), cancellationToken);
-	}
-
-	/// <summary>
-	/// Closes the WebSocket connection
+	/// Closes the WebSocket connection.
 	/// </summary>
 	public async Task CloseAsync(WebSocketCloseStatus status, string reason, CancellationToken cancellationToken)
 	{
 		ThrowIfDisposed();
-
 		if (_closeSent)
 			return;
+		await SendCloseFrameAsync(status, reason, cancellationToken).ConfigureAwait(false);
+	}
 
-		byte[] statusBytes = new byte[2]
-		{
-			(byte)(((int)status >> 8) & 0xFF),
-			(byte)((int)status & 0xFF)
-		};
-
+	private async Task SendCloseFrameAsync(WebSocketCloseStatus status, string reason, CancellationToken cancellationToken)
+	{
 		byte[] reasonBytes = string.IsNullOrEmpty(reason) ? Array.Empty<byte>() : Encoding.UTF8.GetBytes(reason);
-		byte[] payload = new byte[statusBytes.Length + reasonBytes.Length];
-		Array.Copy(statusBytes, 0, payload, 0, statusBytes.Length);
-		Array.Copy(reasonBytes, 0, payload, statusBytes.Length, reasonBytes.Length);
+		if (reasonBytes.Length > 123)
+			throw new ArgumentException("Close reason is too long (max 123 bytes when serialized as UTF-8)", nameof(reason));
+
+		byte[] payload = new byte[2 + reasonBytes.Length];
+		payload[0] = (byte)(((int)status >> 8) & 0xFF);
+		payload[1] = (byte)((int)status & 0xFF);
+		if (reasonBytes.Length > 0)
+			Array.Copy(reasonBytes, 0, payload, 2, reasonBytes.Length);
 
 		await SendFrameAsync(new WebSocketFrame(true, WebSocketOpcode.Close, payload), cancellationToken).ConfigureAwait(false);
 		_closeSent = true;
@@ -241,6 +304,80 @@ public class WebSocketConnection(
 		{
 			_sendLock.Release();
 		}
+	}
+
+	private async Task FailConnectionAsync(WebSocketCloseStatus status, string description, CancellationToken cancellationToken)
+	{
+		try
+		{
+			if (!_disposedValue && !_closeSent)
+			{
+				await SendCloseFrameAsync(status, TruncateReasonForCloseFrame(description), cancellationToken).ConfigureAwait(false);
+			}
+		}
+		catch
+		{
+			// Best effort - peer may have closed already.
+		}
+		finally
+		{
+			_isOpen = false;
+		}
+
+		throw new WebSocketProtocolException(status, description);
+	}
+
+	/// <summary>
+	/// Trims <paramref name="reason"/> to fit the 123-byte UTF-8 close-reason limit, splitting at a
+	/// codepoint boundary so a multi-byte character is never cut in half.
+	/// </summary>
+	private static string TruncateReasonForCloseFrame(string reason)
+	{
+		if (string.IsNullOrEmpty(reason)) return "";
+		byte[] bytes = Encoding.UTF8.GetBytes(reason);
+		if (bytes.Length <= 123) return reason;
+
+		// Walk back from byte 123 until we land on a UTF-8 leading byte (0xxxxxxx or 11xxxxxx).
+		int cut = 123;
+		while (cut > 0 && (bytes[cut] & 0xC0) == 0x80)
+			cut--;
+		return Encoding.UTF8.GetString(bytes, 0, cut);
+	}
+
+	private static bool IsValidUtf8(byte[] data)
+	{
+		try
+		{
+			StrictUtf8.GetCharCount(data);
+			return true;
+		}
+		catch (DecoderFallbackException)
+		{
+			return false;
+		}
+	}
+
+	/// <summary>
+	/// Returns true if <paramref name="code"/> is a valid close-frame status code per RFC 6455 7.4.
+	/// </summary>
+	private static bool IsValidCloseCode(ushort code)
+	{
+		// Reserved range: 0-999
+		if (code < 1000) return false;
+		// 1000-1011 defined; 1004 reserved/unassigned, 1005/1006 must not appear in frames
+		if (code <= 1011)
+		{
+			return code != 1004 && code != 1005 && code != 1006;
+		}
+		// 1012, 1013, 1014 are IANA-registered (Service Restart / Try Again Later / Bad Gateway)
+		if (code <= 1014) return true;
+		// 1015 (TLS handshake) must not appear in frames
+		if (code == 1015) return false;
+		// 1016-2999 reserved
+		if (code <= 2999) return false;
+		// 3000-3999 framework registered, 4000-4999 application private use
+		if (code <= 4999) return true;
+		return false;
 	}
 
 	private void ThrowIfDisposed()

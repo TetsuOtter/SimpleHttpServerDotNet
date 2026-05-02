@@ -15,6 +15,21 @@ public class WebSocketFrame
 	public bool IsFinal { get; }
 
 	/// <summary>
+	/// RSV1 bit (must be 0 unless an extension defines it)
+	/// </summary>
+	public bool Rsv1 { get; }
+
+	/// <summary>
+	/// RSV2 bit (must be 0 unless an extension defines it)
+	/// </summary>
+	public bool Rsv2 { get; }
+
+	/// <summary>
+	/// RSV3 bit (must be 0 unless an extension defines it)
+	/// </summary>
+	public bool Rsv3 { get; }
+
+	/// <summary>
 	/// Frame opcode
 	/// </summary>
 	public WebSocketOpcode Opcode { get; }
@@ -35,14 +50,17 @@ public class WebSocketFrame
 	public byte[] Payload { get; }
 
 	/// <summary>
-	/// Creates a new WebSocket frame
+	/// Creates a new WebSocket frame, including reserved bits
 	/// </summary>
-	public WebSocketFrame(bool isFinal, WebSocketOpcode opcode, bool isMasked, byte[] maskingKey, byte[] payload)
+	public WebSocketFrame(bool isFinal, bool rsv1, bool rsv2, bool rsv3, WebSocketOpcode opcode, bool isMasked, byte[] maskingKey, byte[] payload)
 	{
 		if (isMasked && maskingKey.Length != 4)
 			throw new ArgumentException("Masking key must be 4 bytes when masked", nameof(maskingKey));
 
 		IsFinal = isFinal;
+		Rsv1 = rsv1;
+		Rsv2 = rsv2;
+		Rsv3 = rsv3;
 		Opcode = opcode;
 		IsMasked = isMasked;
 		MaskingKey = maskingKey;
@@ -50,10 +68,18 @@ public class WebSocketFrame
 	}
 
 	/// <summary>
+	/// Creates a new WebSocket frame with no reserved bits set
+	/// </summary>
+	public WebSocketFrame(bool isFinal, WebSocketOpcode opcode, bool isMasked, byte[] maskingKey, byte[] payload)
+		: this(isFinal, false, false, false, opcode, isMasked, maskingKey, payload)
+	{
+	}
+
+	/// <summary>
 	/// Creates an unmasked WebSocket frame
 	/// </summary>
 	public WebSocketFrame(bool isFinal, WebSocketOpcode opcode, byte[] payload)
-		: this(isFinal, opcode, false, Array.Empty<byte>(), payload)
+		: this(isFinal, false, false, false, opcode, false, Array.Empty<byte>(), payload)
 	{
 	}
 
@@ -78,8 +104,13 @@ public class WebSocketFrame
 		byte[] frame = new byte[headerLength + payloadLength];
 		int offset = 0;
 
-		// First byte: FIN + RSV + Opcode
-		frame[offset++] = (byte)((IsFinal ? 0x80 : 0x00) | ((int)Opcode & 0x0F));
+		// First byte: FIN + RSV1/2/3 + Opcode
+		byte firstByte = (byte)((int)Opcode & 0x0F);
+		if (IsFinal) firstByte |= 0x80;
+		if (Rsv1) firstByte |= 0x40;
+		if (Rsv2) firstByte |= 0x20;
+		if (Rsv3) firstByte |= 0x10;
+		frame[offset++] = firstByte;
 
 		// Second byte: MASK + Payload length
 		byte maskBit = (byte)(IsMasked ? 0x80 : 0x00);

@@ -8,8 +8,11 @@
 
 - ✅ **シンプルな API**: HTTP サーバーの構築が簡単
 - ✅ **非同期処理**: Task ベースの非同期 API で高効率な処理
-- ✅ **WebSocket 対応**: WebSocket 通信をネイティブサポート
-- ✅ **マルチフレームワーク対応**: netstandard2.0, netstandard2.1, net8.0, net10.0 をサポート
+- ✅ **WebSocket 対応**: RFC 6455 準拠の WebSocket 通信をネイティブサポート
+- ✅ **プロトコル検証**: RSV ビット・オペコード・マスク・フレームサイズなど RFC 6455 に基づく厳密な検証
+- ✅ **Ping/Pong**: Ping フレームへの自動 Pong 返信とイベント通知
+- ✅ **サブプロトコルネゴシエーション**: `Sec-WebSocket-Protocol` ヘッダーによるサブプロトコルの選択
+- ✅ **.NET Standard 2.0 対応**: netstandard2.1, net8.0, net10.0 などとも互換
 - ✅ **MIT ライセンス**: 自由に使用・改変可能
 
 ## プロジェクト構成
@@ -24,7 +27,9 @@
 - `HttpRequest`: HTTP リクエストを表すクラス
 - `HttpResponse`: HTTP レスポンスを表すクラス
 - `WebSocketConnection`: WebSocket 接続を管理するクラス
+- `WebSocketOptions`: WebSocket の動作設定クラス
 - `WebSocketHandler`: WebSocket 処理のデリゲート
+- `WebSocketProtocolException`: WebSocket プロトコル違反時にスローされる例外
 
 ### TR.SimpleHttpServer.Host
 
@@ -91,9 +96,7 @@ using TR.SimpleHttpServer.WebSocket;
 async Task<WebSocketHandler?> HandleWebSocketPath(string path)
 {
 	if (path == "/ws")
-	{
 		return HandleWebSocketConnection;
-	}
 	return null;
 }
 
@@ -105,14 +108,10 @@ async Task HandleWebSocketConnection(HttpRequest request, WebSocketConnection co
 		var message = await connection.ReceiveMessageAsync(CancellationToken.None);
 
 		if (message.Type == WebSocketMessageType.Close)
-		{
-			await connection.CloseAsync(WebSocketCloseStatus.NormalClosure, "", CancellationToken.None);
-			break;
-		}
+			break; // AutoRespondToClose=true (既定) により Close フレームは自動送信済み
 
 		if (message.Type == WebSocketMessageType.Text)
 		{
-			// テキストメッセージをエコーバック
 			string text = message.GetText();
 			await connection.SendTextAsync($"Echo: {text}", CancellationToken.None);
 		}
@@ -124,6 +123,23 @@ using var server = new HttpServer(8080, HandleRequest, HandleWebSocketPath);
 server.Start();
 ```
 
+### WebSocket オプションを指定する場合
+
+```csharp
+using TR.SimpleHttpServer.WebSocket;
+
+WebSocketOptions options = new()
+{
+	SupportedSubProtocols = new[] { "chat", "superchat" },
+	MaxFrameSize = 4 * 1024 * 1024,    // 4 MB
+	MaxMessageSize = 16 * 1024 * 1024, // 16 MB
+	ValidateUtf8 = true,
+};
+
+using var server = new HttpServer(8080, HandleRequest, HandleWebSocketPath, options);
+server.Start();
+```
+
 ## API リファレンス
 
 ### HttpServer
@@ -132,7 +148,8 @@ server.Start();
 // HTTPサーバーを初期化
 public HttpServer(ushort port, HttpConnectionHandler handler);
 public HttpServer(ushort port, HttpConnectionHandler handler, WebSocketHandlerSelector webSocketHandlerSelector);
-public HttpServer(IPAddress localAddress, ushort port, HttpConnectionHandler handler, WebSocketHandlerSelector? webSocketHandlerSelector = null);
+public HttpServer(ushort port, HttpConnectionHandler handler, WebSocketHandlerSelector webSocketHandlerSelector, WebSocketOptions webSocketOptions);
+public HttpServer(IPAddress localAddress, ushort port, HttpConnectionHandler handler, WebSocketHandlerSelector? webSocketHandlerSelector = null, WebSocketOptions? webSocketOptions = null);
 
 // サーバーを開始
 public void Start();
@@ -175,8 +192,11 @@ public class HttpRequest
 // ステータスコードと文字列レスポンスボディで作成
 public HttpResponse(HttpStatusCode status, string contentType, NameValueCollection additionalHeaders, string body);
 
-// ステータスコードとバイナリレスポンスボディで作成
-public HttpResponse(HttpStatusCode status, string contentType, NameValueCollection additionalHeaders, byte[] body);
+// ステータス文字列と文字列レスポンスボディで作成 (例: "404 Not Found")
+public HttpResponse(string status, string contentType, NameValueCollection additionalHeaders, string body);
+
+// ステータス文字列とバイナリレスポンスボディで作成
+public HttpResponse(string status, string contentType, NameValueCollection additionalHeaders, byte[] body);
 
 public string Status { get; }
 public string ContentType { get; }
@@ -184,10 +204,56 @@ public byte[] Body { get; }
 public NameValueCollection AdditionalHeaders { get; }
 ```
 
+### WebSocketOptions
+
+```csharp
+public class WebSocketOptions
+{
+	// 単一フレームの最大ペイロードサイズ (既定: 16 MB)
+	// 超過した場合は 1009 (Message Too Big) で接続を閉じる
+	public int MaxFrameSize { get; set; }
+
+	// フラグメント化されたメッセージの最大合計ペイロードサイズ (既定: 64 MB)
+	public int MaxMessageSize { get; set; }
+
+	// クライアントフレームのマスクを必須とするか (既定: true)
+	// RFC 6455 §5.1 準拠。false の場合はテスト用途向け
+	public bool RequireMasking { get; set; }
+
+	// Close フレーム受信時に Close フレームを自動送信するか (既定: true)
+	public bool AutoRespondToClose { get; set; }
+
+	// テキストメッセージの UTF-8 妥当性を検証するか (既定: true)
+	// 無効な場合は 1007 (Invalid Payload Data) で接続を閉じる
+	public bool ValidateUtf8 { get; set; }
+
+	// サーバーがサポートするサブプロトコルのリスト (優先順)
+	// null または空の場合はサブプロトコルネゴシエーションを行わない
+	public IReadOnlyList<string>? SupportedSubProtocols { get; set; }
+}
+```
+
 ### WebSocketConnection
 
 ```csharp
+// コンストラクター
+public WebSocketConnection(Stream stream);
+public WebSocketConnection(Stream stream, WebSocketOptions options, string? selectedSubProtocol = null);
+
+// 接続が開いているかどうかを確認
+public bool IsOpen { get; }
+
+// ハンドシェイクで選択されたサブプロトコル (ない場合は null)
+public string? SelectedSubProtocol { get; }
+
+// Ping フレーム受信時に発火するイベント
+public event EventHandler<PingPongEventArgs>? PingReceived;
+
+// Pong フレーム受信時に発火するイベント
+public event EventHandler<PingPongEventArgs>? PongReceived;
+
 // WebSocketメッセージを受信
+// プロトコル違反時は WebSocketProtocolException をスロー (接続は既にクローズ済み)
 public Task<WebSocketMessage> ReceiveMessageAsync(CancellationToken cancellationToken);
 
 // テキストメッセージを送信
@@ -196,11 +262,46 @@ public Task SendTextAsync(string text, CancellationToken cancellationToken);
 // バイナリメッセージを送信
 public Task SendBinaryAsync(byte[] data, CancellationToken cancellationToken);
 
-// WebSocket接続をクローズ
-public Task CloseAsync(WebSocketCloseStatus status, string statusDescription, CancellationToken cancellationToken);
+// Ping フレームを送信 (ペイロードは最大 125 バイト)
+public Task SendPingAsync(byte[] data, CancellationToken cancellationToken);
 
-// 接続が開いているかどうかを確認
-public bool IsOpen { get; }
+// Close フレームを送信して接続をクローズ
+public Task CloseAsync(WebSocketCloseStatus status, string reason, CancellationToken cancellationToken);
+```
+
+### WebSocketMessage
+
+```csharp
+public class WebSocketMessage
+{
+	// メッセージの種類 (Text / Binary / Close)
+	public WebSocketMessageType Type { get; }
+
+	// メッセージの生データ
+	public byte[] Data { get; }
+
+	// Close メッセージのステータスコード (Close 以外は null)
+	public WebSocketCloseStatus? CloseStatus { get; }
+
+	// Close メッセージの理由文字列 (Close 以外は空文字)
+	public string CloseReason { get; }
+
+	// データを UTF-8 文字列として取得
+	public string GetText();
+}
+```
+
+### WebSocketProtocolException
+
+RFC 6455 プロトコル違反を検出した場合にスローされる例外です。
+スローされる前に、対応するステータスコードで Close フレームが送信されます。
+
+```csharp
+public class WebSocketProtocolException : Exception
+{
+	// 送信された Close ステータスコード
+	public WebSocketCloseStatus CloseStatus { get; }
+}
 ```
 
 ## ホストアプリケーション
@@ -217,29 +318,17 @@ dotnet run --project TR.SimpleHttpServer.Host
 
 ## テスト
 
-### ユニットテストの実行
-
 ```bash
 dotnet test TR.SimpleHttpServer.Tests
 ```
 
-### E2E テストの実行
-
-WebSocket の統合テスト:
-
-```bash
-# サーバーを起動
-dotnet run --project TR.SimpleHttpServer.Host &
-
-# テストを実行
-cd e2e-tests
-pip install -r requirements.txt
-pytest -v
-```
-
 ## 対応フレームワーク
 
-- .NET Standard 2.0
+ライブラリは **netstandard2.0** をターゲットとしており、以下のランタイムで動作します:
+
+- .NET Standard 2.0 / 2.1
+- .NET 5 以降 (net8.0, net10.0 など)
+- .NET Framework 4.6.1 以降
 
 ## ライセンス
 

@@ -439,7 +439,7 @@ public class WebSocketIntegrationTests : IDisposable
 	}
 
 	[Fact]
-	public async Task WebSocketHandshake_WrongVersion_Returns200AsNormalHttp()
+	public async Task WebSocketHandshake_WrongVersion_Returns400WithVersionHeader()
 	{
 		// Arrange - Request with wrong WebSocket version
 		using TcpClient client = new();
@@ -469,8 +469,9 @@ public class WebSocketIntegrationTests : IDisposable
 		int bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
 		string response = Encoding.UTF8.GetString(buffer, 0, bytesRead);
 
-		// Assert
-		Assert.Contains("HTTP/1.0 200", response);
+		// Assert - RFC 6455 §4.4: server MUST respond with 400 and the supported version header
+		Assert.Contains("HTTP/1.1 400", response);
+		Assert.Contains("Sec-WebSocket-Version: 13", response);
 	}
 
 	[Fact]
@@ -733,14 +734,14 @@ public class WebSocketIntegrationTests : IDisposable
 	}
 
 	[Fact]
-	public async Task WebSocket_UnmaskedClientFrame_ServerReceivesMessage()
+	public async Task WebSocket_UnmaskedClientFrame_ServerClosesWithProtocolError()
 	{
-		// Note: RFC 6455 says client MUST mask frames, but some implementations may be lenient
-		// This test documents actual behavior
+		// RFC 6455 Section 5.1: server MUST close the connection upon receiving an unmasked
+		// client frame. This test verifies that the server sends a Close frame with status
+		// 1002 (Protocol Error) instead of accepting the frame.
 
 		// Arrange
 		ushort port = GetAvailablePort();
-		var messageReceived = new TaskCompletionSource<string>();
 
 		using HttpServer server = new HttpServer(port, HttpHandler, async (path) =>
 		{
@@ -748,14 +749,7 @@ public class WebSocketIntegrationTests : IDisposable
 			{
 				return async (req, conn) =>
 				{
-					try
-					{
-						var msg = await conn.ReceiveMessageAsync(CancellationToken.None);
-						if (msg.Type == WebSocketMessageType.Text)
-						{
-							messageReceived.TrySetResult(msg.GetText());
-						}
-					}
+					try { await conn.ReceiveMessageAsync(CancellationToken.None); }
 					catch { }
 				};
 			}
@@ -774,16 +768,21 @@ public class WebSocketIntegrationTests : IDisposable
 			await PerformHandshakeAsync(stream, port);
 			await Task.Delay(100);
 
-			// Send unmasked frame (technically violates RFC 6455 for client)
+			// Send unmasked frame (violates RFC 6455 for client)
 			byte[] payload = Encoding.UTF8.GetBytes("Test");
 			stream.WriteByte(0x81); // FIN=1, Text
 			stream.WriteByte((byte)payload.Length); // MASK=0, Length
 			stream.Write(payload, 0, payload.Length);
 			await stream.FlushAsync();
 
-			// Server should still receive the message
-			string receivedMessage = await WaitWithTimeoutAsync(messageReceived.Task, TimeSpan.FromSeconds(5));
-			Assert.Equal("Test", receivedMessage);
+			// Assert - server responds with Close frame (status 1002)
+			WebSocketFrameReader reader = new(stream);
+			WebSocketFrame responseFrame = await reader.ReadFrameAsync(CancellationToken.None);
+
+			Assert.Equal(WebSocketOpcode.Close, responseFrame.Opcode);
+			Assert.True(responseFrame.Payload.Length >= 2);
+			ushort code = (ushort)((responseFrame.Payload[0] << 8) | responseFrame.Payload[1]);
+			Assert.Equal((ushort)WebSocketCloseStatus.ProtocolError, code);
 		}
 		finally
 		{
